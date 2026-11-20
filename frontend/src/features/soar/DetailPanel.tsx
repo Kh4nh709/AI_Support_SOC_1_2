@@ -302,7 +302,15 @@ function Body({ detail }: { detail: SoarReviewDetail }) {
   );
 }
 
-export function DetailPanel({ id, onClose }: { id: string; onClose: () => void }) {
+export function DetailPanel({
+  id,
+  onClose,
+  actions,
+}: {
+  id: string;
+  onClose: () => void;
+  actions: (detail: SoarReviewDetail) => ReactNode;
+}) {
   const titleId = useId();
   const box = useRef<HTMLElement>(null);
   const query = useQuery({
@@ -350,7 +358,7 @@ export function DetailPanel({ id, onClose }: { id: string; onClose: () => void }
       aria-labelledby={titleId}
       tabIndex={-1}
       onKeyDown={onKeyDown}
-      className="flex min-w-0 w-[30rem] max-w-[40%] shrink-0 flex-col gap-4 self-start rounded border border-border bg-surface p-4 focus:outline-none"
+      className="flex min-w-0 w-full flex-col gap-4 self-start rounded border border-border bg-surface p-4 focus:outline-none"
     >
       <div className="flex items-start justify-between gap-3">
         <h2 id={titleId} className="min-w-0 text-base font-semibold wrap-anywhere">
@@ -360,6 +368,7 @@ export function DetailPanel({ id, onClose }: { id: string; onClose: () => void }
           {D.close}
         </button>
       </div>
+      {query.data && !query.isError && actions(query.data)}
       {body}
     </section>
   );

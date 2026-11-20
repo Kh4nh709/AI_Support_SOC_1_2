@@ -30,7 +30,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
     <div className="flex items-start gap-6">
       <nav
         aria-label={S.admin.nav.label}
-        className="flex w-56 shrink-0 flex-col gap-1 rounded-lg border border-border bg-[#0f141b] p-3"
+        className="flex w-56 shrink-0 flex-col gap-1 rounded-lg border border-border bg-console-inset p-3"
       >
         {PAGES.map((page) => (
           <NavLink
@@ -39,8 +39,8 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             className={({ isActive }) =>
               `${LINK} ${
                 isActive
-                  ? "bg-[#1c2530] font-semibold text-text"
-                  : "text-[#aeb9c6] hover:bg-[#161d27] hover:text-text"
+                  ? "bg-console-active font-semibold text-text"
+                  : "text-console-secondary hover:bg-console-hover hover:text-text"
               }`
             }
           >

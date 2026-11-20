@@ -38,15 +38,15 @@ const BUTTON = `h-[34px] whitespace-nowrap rounded-md border px-3 text-[13px] ${
 // A button that does nothing right now looks it: the row's write is out, or there is no label to take off.
 const DIMMED = "opacity-50";
 // Whole class names, written out: Tailwind finds a class by reading the source.
-const IDLE = "border-[#2e3a48] text-[#c9d3df] hover:bg-ground";
+const IDLE = "border-console-outline text-console-body hover:bg-ground";
 const PRESSED: Record<LabLabel, string> = {
-  true_positive: "border-[#7a2e38] bg-[#3a1217] font-semibold text-[#fda4af]",
-  false_positive: "border-[#1f6b49] bg-[#133528] font-semibold text-[#9ff0c5]",
+  true_positive: "border-console-danger-emphasis bg-console-danger-selected font-semibold text-console-danger-text",
+  false_positive: "border-console-success-emphasis bg-console-success-surface font-semibold text-console-success-text",
 };
 const CHIP: Record<LabLabel | "none", string> = {
-  true_positive: "bg-[#3a1217] text-[#fda4af]",
-  false_positive: "bg-[#133528] text-[#9ff0c5]",
-  none: "bg-[#1c2530] text-[#8fa0b3]",
+  true_positive: "bg-console-danger-selected text-console-danger-text",
+  false_positive: "bg-console-success-surface text-console-success-text",
+  none: "bg-console-active text-console-caption",
 };
 
 /** A field that came empty is a dash, never a blank and never the word "null". */
@@ -105,15 +105,15 @@ export function LabAlertRow({
         <span>
           <span className="text-muted">{R.received}</span> {formatDateTime(alert.received_at)}
         </span>
-        <span className="text-[#aeb9c6]">
+        <span className="text-console-secondary">
           {R.rule} <span className={`${MONO} text-text`}>{orDash(alert.rule_id)}</span>{" "}
           <span>{R.level(alert.rule_level)}</span>
         </span>
-        <span className="text-[#aeb9c6]">
+        <span className="text-console-secondary">
           {R.agent}{" "}
           <span className={`${MONO} break-words text-text`}>{orDash(alert.agent_name)}</span>
         </span>
-        <span className={`${MONO} break-words text-[#aeb9c6]`}>
+        <span className={`${MONO} break-words text-console-secondary`}>
           {`${orDash(alert.srcip)} → ${orDash(alert.dstip)}`}
         </span>
         <span
@@ -126,7 +126,7 @@ export function LabAlertRow({
       <p className="text-[14px] break-words">{orDash(alert.description)}</p>
 
       <details onToggle={(event) => setOpen(event.currentTarget.open)}>
-        <summary className={`cursor-pointer text-[13px] text-[#aeb9c6] hover:text-text ${FOCUS}`}>
+        <summary className={`cursor-pointer text-[13px] text-console-secondary hover:text-text ${FOCUS}`}>
           {R.details}
         </summary>
         {open && (
@@ -145,7 +145,7 @@ export function LabAlertRow({
             </dl>
             <div className="space-y-1.5">
               {/* Not a heading: the page has an h1 and no h2, so a heading here would skip a level. */}
-              <p className="text-[13px] font-semibold text-[#aeb9c6]">{R.detail.rawLog}</p>
+              <p className="text-[13px] font-semibold text-console-secondary">{R.detail.rawLog}</p>
               <LogBlock text={alert.raw_log} />
               {alert.raw_log_truncated_for_display && (
                 <p className="text-xs text-muted">{R.detail.rawLogCut}</p>
@@ -184,7 +184,7 @@ export function LabAlertRow({
       {error !== null && (
         <p
           role="alert"
-          className="rounded-lg border border-[#5a2e36] bg-[#2a1016] px-3.5 py-2.5 text-[13px] leading-snug text-[#fda4af]"
+          className="rounded-lg border border-console-danger-outline bg-critical-bg px-3.5 py-2.5 text-[13px] leading-snug text-console-danger-text"
         >
           {error}
         </p>

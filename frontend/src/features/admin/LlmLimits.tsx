@@ -40,7 +40,7 @@ const L = S.admin.llmPage;
 
 const PANEL = "flex flex-col gap-3 rounded-[10px] border bg-surface px-5 py-[18px]";
 const INPUT =
-  "h-10 w-full rounded-md border bg-[#0f141b] px-3 text-sm text-text focus-visible:outline-2 focus-visible:outline-text";
+  "h-10 w-full rounded-md border bg-console-inset px-3 text-sm text-text focus-visible:outline-2 focus-visible:outline-text";
 
 /** A line of the confirmation: one changed field, with the value in force and the one being saved. */
 type Change = { field: LimitField; old: number; next: number };
@@ -86,7 +86,7 @@ const CHANGE_COLUMNS: Column<Change>[] = [
   {
     id: "old",
     header: L.confirm.colOld,
-    cell: (row) => <span className="text-[#aeb9c6]">{valueText(row.field, row.old)}</span>,
+    cell: (row) => <span className="text-console-secondary">{valueText(row.field, row.old)}</span>,
     className: "text-right",
   },
   {
@@ -110,7 +110,7 @@ function Shield() {
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
-      className="text-[#fda4af]"
+      className="text-console-danger-text"
     >
       <path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z" />
       <path d="M12 9v4M12 16v.5" />
@@ -145,7 +145,7 @@ function LimitInput({
     .join(" ");
   return (
     <div className="flex flex-col gap-1.5">
-      <label htmlFor={id} className="text-[13px] text-[#aeb9c6]">
+      <label htmlFor={id} className="text-[13px] text-console-secondary">
         {L.limits.field[field]}
       </label>
       <input
@@ -160,18 +160,18 @@ function LimitInput({
         onChange={(event) => onChange(event.target.value)}
         aria-invalid={fault !== undefined ? true : undefined}
         aria-describedby={describedBy}
-        className={`${INPUT} ${fault !== undefined ? "border-[#f87171]" : "border-[#2e3a48]"}`}
+        className={`${INPUT} ${fault !== undefined ? "border-console-danger-marker" : "border-console-outline"}`}
       />
       <p id={hintId} className="text-xs text-muted">
         {L.limits.rangeHint(bound.min, bound.max)} · {sourceText(source)}
       </p>
       {source.clamped && (
-        <p id={clampedId} className="text-xs text-[#fcd9a8]">
+        <p id={clampedId} className="text-xs text-console-warning-text">
           {L.limits.clamped}
         </p>
       )}
       {fault !== undefined && (
-        <p id={faultId} className="text-[12.5px] text-[#fda4af]">
+        <p id={faultId} className="text-[12.5px] text-console-danger-text">
           {fault}
         </p>
       )}
@@ -252,13 +252,13 @@ export function LlmLimits({
 
   if (failClosed || limits === null) {
     return (
-      <section aria-labelledby={titleId} className={`${PANEL} border-[#5a2e36]`}>
+      <section aria-labelledby={titleId} className={`${PANEL} border-console-danger-outline`}>
         <h2 id={titleId} className="text-[15px] font-semibold">
           {L.limits.title}
         </h2>
         <Shield />
         <h3 className="text-[17px] font-semibold">{L.failClosed.title}</h3>
-        <p className="text-[13.5px] leading-relaxed text-[#c9d3df]">{L.failClosed.body}</p>
+        <p className="text-[13.5px] leading-relaxed text-console-body">{L.failClosed.body}</p>
       </section>
     );
   }
@@ -309,7 +309,7 @@ export function LlmLimits({
     warning = (
       <div
         role="alert"
-        className="rounded-lg border border-[#5a3a14] bg-[#2a1a0a] px-3.5 py-3 text-[13.5px] leading-snug text-[#fcd9a8]"
+        className="rounded-lg border border-console-warning-outline bg-high-bg px-3.5 py-3 text-[13.5px] leading-snug text-console-warning-text"
       >
         {L.confirm.belowSpent(formatUsd(pending.belowSpent, true), formatUsd(spentUsd))}
       </div>
@@ -317,7 +317,7 @@ export function LlmLimits({
   }
 
   return (
-    <section aria-labelledby={titleId} className={`${PANEL} border-[#3a4757]`}>
+    <section aria-labelledby={titleId} className={`${PANEL} border-console-outline-strong`}>
       <h2 id={titleId} className="text-[15px] font-semibold">
         {L.limits.title}
       </h2>
@@ -368,7 +368,7 @@ export function LlmLimits({
             rowKey={(row) => row.field}
           />
           {warning}
-          <p className="text-xs leading-relaxed text-[#aeb9c6]">{L.confirm.note}</p>
+          <p className="text-xs leading-relaxed text-console-secondary">{L.confirm.note}</p>
         </ConfirmDialog>
       )}
     </section>

@@ -167,20 +167,20 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         aria-labelledby={titleId}
         aria-describedby={hasBody ? bodyId : undefined}
         tabIndex={-1}
-        className="flex w-full max-w-md flex-col gap-3 rounded-xl border border-[#3a4757] bg-[#18202a] p-[18px] shadow-xl focus:outline-none"
+        className="flex w-full max-w-md flex-col gap-3 rounded-xl border border-console-outline-strong bg-console-dialog p-[18px] shadow-xl focus:outline-none"
       >
         <h2 id={titleId} className="text-[17px] font-semibold">
           {title}
         </h2>
         {hasBody && (
-          <div id={bodyId} className="space-y-2 text-[13.5px] leading-relaxed text-[#c9d3df]">
+          <div id={bodyId} className="space-y-2 text-[13.5px] leading-relaxed text-console-body">
             {children}
           </div>
         )}
         {hasError && (
           <div
             role="alert"
-            className="rounded-lg border border-[#5a2e36] bg-[#2a1016] px-3.5 py-3 text-[13.5px] leading-snug text-[#fda4af]"
+            className="rounded-lg border border-console-danger-outline bg-critical-bg px-3.5 py-3 text-[13.5px] leading-snug text-console-danger-text"
           >
             {error}
           </div>
@@ -191,7 +191,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
             type="button"
             disabled={busy}
             onClick={onCancel}
-            className="h-10 rounded-lg border border-[#2e3a48] px-3.5 text-sm text-[#c9d3df] hover:bg-ground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text disabled:opacity-50"
+            className="h-10 rounded-lg border border-console-outline px-3.5 text-sm text-console-body hover:bg-ground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text disabled:opacity-50"
           >
             {cancelLabel ?? S.admin.common.cancel}
           </button>

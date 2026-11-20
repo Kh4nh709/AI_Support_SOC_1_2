@@ -170,11 +170,11 @@ describe("idle", () => {
     expect(screen.queryByText(S.ai2.loading)).not.toBeInTheDocument();
   });
 
-  it("is 560 px wide", async () => {
+  it("fills the available width", async () => {
     serveViews(idle());
     const { container } = renderColumn();
     await analyzeButton();
-    expect(container.querySelector("section")).toHaveClass("w-[560px]");
+    expect(container.querySelector("section")).toHaveClass("w-full", "min-w-0");
   });
 
   it("offers no button on a concluded case with no analysis, and says why", async () => {
@@ -780,7 +780,7 @@ describe("done", () => {
     await screen.findByRole("tablist");
     const region = screen.getByRole("region", { name: S.case.aiHeading });
     expect(within(region).getByRole("tablist")).toBeInTheDocument();
-    expect(region).toHaveClass("w-[560px]");
+    expect(region).toHaveClass("w-full", "min-w-0");
   });
 
   it("says the case at the right of the heading when the page gives its line", async () => {

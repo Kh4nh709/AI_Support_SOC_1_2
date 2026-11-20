@@ -13,12 +13,14 @@ import {
   signIn,
   waitForStatus,
   type Posted,
+  openWorkspaceTab,
 } from "./fixtures";
 
 /** `REVIEW_DELTA_TOLERANCE` of the stack (scripts/ui_e2e_stack.sh): a growth past it asks for a second look. */
 const TOLERANCE = 20;
 
-const rowOf = (page: Page, id: string) => page.locator(`a[href="/alerts/${id}"]`);
+const rowOf = (page: Page, id: string) =>
+  page.getByRole("table", { name: S.queue.tableLabel }).locator(`a[href="/alerts/${id}"]`);
 const toast = (page: Page, text: string) => page.getByRole("status").filter({ hasText: text });
 
 type Decide = { seen: number | undefined; status: number; body: unknown };
@@ -42,6 +44,7 @@ function watchDecides(page: Page, id: string): Decide[] {
 /** A head in the queue and held by the signed-in Tier-1 user, on its page, with the decide form drawn. */
 async function holdHead(page: Page, head: Posted): Promise<void> {
   await page.goto(`/alerts/${head.id}`);
+  await openWorkspaceTab(page, S.workspace.alertDecision);
   await page.getByRole("button", { name: S.decision.acknowledge }).click();
   await expect(toast(page, S.decision.acknowledged)).toBeVisible();
   await expect(page.getByRole("button", { name: S.decision.submit })).toBeVisible();
@@ -59,6 +62,7 @@ test("Tier 1 takes an alert, closes it as a false positive with a reason, and si
   await rowOf(page, head.id).click();
   await expect(page).toHaveURL(`/alerts/${head.id}`);
 
+  await openWorkspaceTab(page, S.workspace.alertDecision);
   await page.getByRole("button", { name: S.decision.acknowledge }).click();
   await expect(toast(page, S.decision.acknowledged)).toBeVisible();
 
@@ -162,6 +166,7 @@ test("a session ended under the analyst's hands: the 401 keeps the reason, and o
   // The login returns to the alert, and the reason is still in the box; the answer is chosen again.
   await signIn(page, "t1");
   await expect(page).toHaveURL(`/alerts/${head.id}`);
+  await openWorkspaceTab(page, S.workspace.alertDecision);
   await expect(reasonBox(page)).toHaveValue(reason);
   await page.getByLabel(S.decision.falsePositive).check();
   await page.getByRole("button", { name: S.decision.submit }).click();

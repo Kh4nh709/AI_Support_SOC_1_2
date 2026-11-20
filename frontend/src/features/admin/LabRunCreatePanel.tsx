@@ -34,10 +34,10 @@ const EMPTY: NewRunValues = { name: "", purpose: null, starts: "", ends: "" };
 /** The text beside each input that is wrong. */
 type Messages = Partial<Record<NewRunField, string>>;
 
-const LABEL = "flex flex-col gap-1.5 text-[13px] text-[#aeb9c6]";
+const LABEL = "flex flex-col gap-1.5 text-[13px] text-console-secondary";
 const INPUT =
-  "h-10 w-full rounded-md border border-[#2e3a48] bg-[#0f141b] px-3 text-sm text-text focus-visible:outline-2 focus-visible:outline-text aria-invalid:border-[#5a2e36]";
-const ERROR = "text-[12.5px] text-[#fda4af]";
+  "h-10 w-full rounded-md border border-console-outline bg-console-inset px-3 text-sm text-text focus-visible:outline-2 focus-visible:outline-text aria-invalid:border-console-danger-outline";
+const ERROR = "text-[12.5px] text-console-danger-text";
 
 export function LabRunCreatePanel({
   onCreated,
@@ -132,7 +132,7 @@ export function LabRunCreatePanel({
   return (
     <section
       aria-labelledby={titleId}
-      className="w-full max-w-[380px] rounded-[10px] border border-[#3a4757] bg-surface px-[22px] py-5"
+      className="w-full max-w-[380px] rounded-[10px] border border-console-outline-strong bg-surface px-[22px] py-5"
     >
       <form noValidate onSubmit={submit} className="flex flex-col gap-3.5">
         <h2 id={titleId} className="text-[17px] font-semibold">
@@ -165,11 +165,11 @@ export function LabRunCreatePanel({
           aria-describedby={describedBy("purpose")}
           className="m-0 flex flex-col gap-2 border-0 p-0"
         >
-          <legend className="mb-1.5 text-[13px] text-[#aeb9c6]">{C.purpose}</legend>
+          <legend className="mb-1.5 text-[13px] text-console-secondary">{C.purpose}</legend>
           {LAB_PURPOSES.map((purpose: LabPurpose, index) => (
             <label
               key={purpose}
-              className="flex items-start gap-2.5 rounded-lg border border-[#2e3a48] px-3 py-2.5 text-[13.5px]"
+              className="flex items-start gap-2.5 rounded-lg border border-console-outline px-3 py-2.5 text-[13.5px]"
             >
               <input
                 type="radio"
@@ -235,7 +235,7 @@ export function LabRunCreatePanel({
           <p
             id={windowErrorId}
             role="alert"
-            className="rounded-lg border border-[#5a2e36] bg-[#2a1016] px-3.5 py-3 text-[13.5px] leading-snug text-[#fda4af]"
+            className="rounded-lg border border-console-danger-outline bg-critical-bg px-3.5 py-3 text-[13.5px] leading-snug text-console-danger-text"
           >
             {windowError}
           </p>
@@ -243,7 +243,7 @@ export function LabRunCreatePanel({
         {formError !== null && (
           <p
             role="alert"
-            className="rounded-lg border border-[#5a2e36] bg-[#2a1016] px-3.5 py-3 text-[13.5px] leading-snug text-[#fda4af]"
+            className="rounded-lg border border-console-danger-outline bg-critical-bg px-3.5 py-3 text-[13.5px] leading-snug text-console-danger-text"
           >
             {formError}
           </p>

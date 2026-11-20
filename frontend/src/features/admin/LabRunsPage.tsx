@@ -28,7 +28,7 @@ function TableSkeleton() {
     >
       <span className="sr-only">{S.common.loading}</span>
       {["a", "b", "c", "d"].map((key) => (
-        <div key={key} className="h-10 animate-pulse rounded-md bg-[#1c2530]" />
+        <div key={key} className="h-10 animate-pulse rounded-md bg-console-active" />
       ))}
     </div>
   );
@@ -56,7 +56,7 @@ const COLUMNS: readonly Column<LabRun>[] = [
     id: "window",
     header: T.col.window,
     cell: (run) => (
-      <span className="text-[#aeb9c6]">
+      <span className="text-console-secondary">
         {S.admin.lab.window(formatDateTime(run.starts_at), formatDateTime(run.ends_at))}
       </span>
     ),
@@ -90,8 +90,8 @@ export function LabRunsPage() {
       <div className="min-w-0 space-y-4">
         <div className="space-y-1">
           <h1 className="text-[26px] font-semibold">{S.admin.lab.title.runs}</h1>
-          <p className="max-w-3xl text-sm text-[#aeb9c6]">{T.subtitle}</p>
-          <p className="min-h-5 text-sm text-[#aeb9c6]">{runs !== null && T.count(runs.length)}</p>
+          <p className="max-w-3xl text-sm text-console-secondary">{T.subtitle}</p>
+          <p className="min-h-5 text-sm text-console-secondary">{runs !== null && T.count(runs.length)}</p>
         </div>
 
         {runs === null ? (

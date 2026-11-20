@@ -27,7 +27,7 @@ const P = S.admin.overviewPage;
 export const PANEL = "rounded-[10px] border border-border bg-surface px-5 py-[18px]";
 /** A button drawn as an outline, for "Thử lại" and the close buttons. */
 export const OUTLINE_BUTTON =
-  "rounded-md border border-[#2e3a48] px-3 py-1.5 text-[13px] text-text hover:bg-ground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-text";
+  "rounded-md border border-console-outline px-3 py-1.5 text-[13px] text-text hover:bg-ground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-text";
 
 /**
  * A block of the page: a section named by its heading, with an optional mark beside the heading.
@@ -68,7 +68,7 @@ export function Panel({
 
 /** A small mark beside a heading: a count, "8/10 ổn". `tone` is the canvas's green, amber or neutral. */
 export function Mark({ tone, children }: { tone: "ok" | "warn"; children: ReactNode }) {
-  const colours = tone === "ok" ? "bg-[#133528] text-[#9ff0c5]" : "bg-[#2a1a0a] text-[#fcd9a8]";
+  const colours = tone === "ok" ? "bg-console-success-surface text-console-success-text" : "bg-high-bg text-console-warning-text";
   return <span className={`rounded px-2 py-[3px] text-xs font-bold ${colours}`}>{children}</span>;
 }
 
@@ -77,7 +77,7 @@ export function BlockError({ failure, onRetry }: { failure: SectionFailure; onRe
   return (
     <div
       role="alert"
-      className="flex min-h-[120px] grow flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-[#3a4757] p-3 text-center text-[13.5px] text-[#c9d3df]"
+      className="flex min-h-[120px] grow flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-console-outline-strong p-3 text-center text-[13.5px] text-console-body"
     >
       <span>{P.blockFailed}</span>
       <span className="text-xs text-muted">{P.sectionError[failure]}</span>
@@ -112,11 +112,11 @@ export function KnowledgeBlock({
         <div className="flex flex-col gap-3">
           <dl className="flex flex-col gap-2 text-[13px]">
             <div className="flex justify-between gap-2.5">
-              <dt className="text-[#aeb9c6]">{K.pending}</dt>
+              <dt className="text-console-secondary">{K.pending}</dt>
               <dd>{formatCount(knowledge.pending)}</dd>
             </div>
             <div className="flex justify-between gap-2.5">
-              <dt className="text-[#aeb9c6]">{K.conflicts}</dt>
+              <dt className="text-console-secondary">{K.conflicts}</dt>
               <dd>{formatCount(knowledge.conflicts)}</dd>
             </div>
           </dl>
@@ -140,7 +140,7 @@ export function Tile({ label, value, sub }: { label: string; value: ReactNode; s
     <div className={`flex flex-col gap-1.5 ${PANEL}`}>
       <dt className="text-[13px] text-muted">{label}</dt>
       <dd className="text-[30px] font-bold tracking-tight">{value}</dd>
-      <dd className="text-[12.5px] text-[#aeb9c6]">{sub}</dd>
+      <dd className="text-[12.5px] text-console-secondary">{sub}</dd>
     </div>
   );
 }
@@ -160,7 +160,7 @@ export function TileError({
       label={label}
       value={S.common.missing}
       sub={
-        <span role="alert" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[#fda4af]">
+        <span role="alert" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-console-danger-text">
           <span>
             {P.tileFailed}. {text}
           </span>
@@ -226,7 +226,7 @@ export function DayChart({ days }: { days: readonly DayPoint[] }) {
                 width={barWidth}
                 height={copies}
                 rx={3}
-                className="fill-[#2a3e5c]"
+                className="fill-console-chart-track"
               />
               <rect
                 data-part="heads"
@@ -234,14 +234,14 @@ export function DayChart({ days }: { days: readonly DayPoint[] }) {
                 y={CHART.axisY - heads}
                 width={barWidth}
                 height={heads}
-                className="fill-[#5b8def]"
+                className="fill-console-interactive"
               />
               {days.length <= LABELLED_DAYS && (
                 <text
                   x={center}
                   y={CHART.axisY - heads - copies - 6}
                   textAnchor="middle"
-                  className="fill-[#aeb9c6] text-[11.5px]"
+                  className="fill-console-secondary text-[11.5px]"
                 >
                   {formatCount(d.total)}
                 </text>
@@ -310,7 +310,7 @@ export function FunnelList({ funnel }: { funnel: NonNullable<OverviewResponse["f
     <dl className="flex flex-col gap-2.5 text-[13.5px]">
       {rows.map((row) => (
         <div key={row.key} className="flex justify-between gap-3">
-          <dt className="text-[#aeb9c6]">{row.label}</dt>
+          <dt className="text-console-secondary">{row.label}</dt>
           <dd className="font-semibold">{row.value}</dd>
         </div>
       ))}
@@ -412,7 +412,7 @@ export function HealthList({
           const label = labelOf(P.health.check, check.name);
           return (
             <div key={`${i}:${check.name}`} className="flex justify-between gap-2.5">
-              <dt className={check.ok ? "text-[#aeb9c6]" : "text-[#fda4af]"}>
+              <dt className={check.ok ? "text-console-secondary" : "text-console-danger-text"}>
                 <span className="sr-only">{check.ok ? P.health.ok : P.health.failing}</span>
                 {label}
                 {/* A failing check also says its name, the one the audit log's health.alarm carries. */}
@@ -421,7 +421,7 @@ export function HealthList({
                 )}
               </dt>
               <dd
-                className={`min-w-0 break-words text-right font-mono text-[11.5px] ${check.ok ? "text-muted" : "text-[#fda4af]"}`}
+                className={`min-w-0 break-words text-right font-mono text-[11.5px] ${check.ok ? "text-muted" : "text-console-danger-text"}`}
               >
                 {check.detail}
               </dd>
@@ -438,7 +438,7 @@ export function HealthList({
 
 function Bar({ className }: { className: string }) {
   return (
-    <div data-skeleton aria-hidden="true" className={`rounded-md bg-[#1a222c] ${className}`} />
+    <div data-skeleton aria-hidden="true" className={`rounded-md bg-console-raised ${className}`} />
   );
 }
 

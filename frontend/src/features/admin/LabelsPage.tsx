@@ -100,10 +100,10 @@ const UNDO_WORDS = {
 // Whole class names: Tailwind finds a class by reading the source. The two pseudo-elements paint a
 // `<progress>` (WebKit and Firefox), since an inline style cannot, and the CSP forbids one.
 const BAR =
-  "h-2 w-full appearance-none overflow-hidden rounded bg-[#1f2833] [&::-webkit-progress-bar]:bg-[#1f2833] [&::-webkit-progress-value]:bg-[#5b8def] [&::-moz-progress-bar]:bg-[#5b8def]";
+  "h-2 w-full appearance-none overflow-hidden rounded bg-console-divider [&::-webkit-progress-bar]:bg-console-divider [&::-webkit-progress-value]:bg-console-interactive [&::-moz-progress-bar]:bg-console-interactive";
 const CARD = "flex flex-col gap-3 rounded-[10px] border bg-surface p-5";
 const OUTLINE_BUTTON =
-  "h-[38px] self-start rounded-lg border border-[#2e3a48] px-3.5 text-sm text-text hover:bg-ground focus-visible:outline-2 focus-visible:outline-text disabled:cursor-not-allowed disabled:opacity-60";
+  "h-[38px] self-start rounded-lg border border-console-outline px-3.5 text-sm text-text hover:bg-ground focus-visible:outline-2 focus-visible:outline-text disabled:cursor-not-allowed disabled:opacity-60";
 
 function Progress({ done, total }: { done: number; total: number }) {
   if (total <= 0) return null;
@@ -128,7 +128,7 @@ function Header({ children }: { children?: ReactNode }) {
     <div className="flex items-end gap-4">
       <div className="flex flex-1 flex-col gap-1">
         <h1 className="text-[26px] leading-tight font-semibold">{S.admin.title.labels}</h1>
-        <p className="text-sm text-[#aeb9c6]">{L.subtitle}</p>
+        <p className="text-sm text-console-secondary">{L.subtitle}</p>
       </div>
       {children}
     </div>
@@ -139,7 +139,7 @@ function ErrorNote({ children }: { children: ReactNode }) {
   return (
     <div
       role="alert"
-      className="rounded-lg border border-[#5a2e36] bg-[#2a1016] px-3 py-2.5 text-[13px] leading-snug text-[#fda4af]"
+      className="rounded-lg border border-console-danger-outline bg-critical-bg px-3 py-2.5 text-[13px] leading-snug text-console-danger-text"
     >
       {children}
     </div>
@@ -168,18 +168,18 @@ function Icon({ stroke, children }: { stroke: string; children: ReactNode }) {
 function FrozenCard({ done, total }: { done: number; total: number }) {
   const id = useId();
   return (
-    <section aria-labelledby={id} className={`${CARD} border-[#3a4757]`}>
-      <Icon stroke="#7fb0ff">
+    <section aria-labelledby={id} className={`${CARD} border-console-outline-strong`}>
+      <Icon stroke="var(--color-console-link)">
         <rect x="5" y="11" width="14" height="10" rx="2" />
         <path d="M8 11V8a4 4 0 0 1 8 0v3" />
       </Icon>
       <h2 id={id} className="text-[17px] font-semibold">
         {L.frozen.title}
       </h2>
-      <p className="self-start rounded border border-[#3a4757] px-2 py-0.5 text-xs font-medium text-[#aeb9c6]">
+      <p className="self-start rounded border border-console-outline-strong px-2 py-0.5 text-xs font-medium text-console-secondary">
         {L.frozen.badge}
       </p>
-      <p className="text-[13.5px] leading-relaxed text-[#c9d3df]">{L.frozen.body(total)}</p>
+      <p className="text-[13.5px] leading-relaxed text-console-body">{L.frozen.body(total)}</p>
       {total > 0 && (
         <div className="max-w-[360px]">
           <Progress done={done} total={total} />
@@ -202,7 +202,7 @@ function FinishedCard({
   const id = useId();
   return (
     <section aria-labelledby={id} className={`${CARD} border-border`}>
-      <Icon stroke="#9ff0c5">
+      <Icon stroke="var(--color-console-success-text)">
         <path d="M4 12l5 5L20 6" />
       </Icon>
       <h2
@@ -213,7 +213,7 @@ function FinishedCard({
       >
         {L.finished.title(total)}
       </h2>
-      <p className="text-[13.5px] leading-relaxed text-[#c9d3df]">{L.finished.body}</p>
+      <p className="text-[13.5px] leading-relaxed text-console-body">{L.finished.body}</p>
       {undo}
     </section>
   );
@@ -226,7 +226,7 @@ function NoCandidatesCard() {
       <h2 id={id} className="text-[17px] font-semibold">
         {L.noCandidates.title}
       </h2>
-      <p className="text-[13.5px] leading-relaxed text-[#c9d3df]">
+      <p className="text-[13.5px] leading-relaxed text-console-body">
         {L.noCandidates.before}{" "}
         <span className="font-mono text-[12.5px]">{L.noCandidates.file}</span>.
       </p>
@@ -234,7 +234,7 @@ function NoCandidatesCard() {
   );
 }
 
-const SKELETON = "animate-pulse rounded-lg bg-[#1a222c]";
+const SKELETON = "animate-pulse rounded-lg bg-console-raised";
 
 /** The page's title and the labelling layout's blocks, so nothing jumps when the cluster arrives. */
 function Skeleton() {
@@ -276,7 +276,7 @@ function LoadFailure({
       {saved !== undefined && <p className="text-[13.5px] leading-relaxed text-low">{saved}</p>}
       <p
         role={onRetry === undefined ? "alert" : undefined}
-        className="text-[13.5px] leading-relaxed text-[#c9d3df]"
+        className="text-[13.5px] leading-relaxed text-console-body"
       >
         {hint}
       </p>

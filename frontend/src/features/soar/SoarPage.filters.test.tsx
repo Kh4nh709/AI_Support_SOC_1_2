@@ -26,6 +26,16 @@ const lastList = (state: ReturnType<typeof fake>, notices = false) => {
 const nav = () => screen.getByRole("navigation", { name: S.soar.tabs.label });
 
 describe("the filters", () => {
+  it("can clear a draft before sending the search", async () => {
+    serve(server, fake());
+    renderSoar();
+    const box = await screen.findByRole("searchbox", { name: S.soar.search.label });
+    await userEvent.type(box, "draft");
+    await userEvent.click(screen.getByRole("button", { name: S.soar.search.clear }));
+    expect(box).toHaveValue("");
+    expect(box).toHaveFocus();
+  });
+
   it("has the four, in order, with Đang mở current at first", async () => {
     serve(server, fake({ rows: [review()] }));
     renderSoar();

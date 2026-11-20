@@ -1,7 +1,7 @@
 // src/features/tier2/CasePage.test.tsx — the case page of the spec §4 (`Case` artboard): the left column
 // (heads, notes, conclusion) against a mocked backend. The ② column has its own file.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { http, HttpResponse, type JsonBodyType } from "msw";
@@ -127,6 +127,14 @@ function renderCase(client: QueryClient = newClient()) {
 
 async function page() {
   return screen.findByRole("heading", { level: 1, name: "SSH brute force vào lab-ubuntu-01" });
+}
+
+function openWorkspaceTab(name: string) {
+  fireEvent.click(
+    within(screen.getByRole("tablist", { name: S.workspace.sections })).getByRole("tab", {
+      name,
+    }),
+  );
 }
 
 describe("the summary", () => {
@@ -344,8 +352,8 @@ describe("the heads", () => {
     serve(detail({ heads: [head({ raw_log: big, raw_log_truncated: true })] }));
     const { container } = renderCase();
     await page();
-    // The ② column loads by itself; count only once it has settled.
-    await screen.findByRole("button", { name: S.ai2.analyze });
+    // The analysis is mounted while Evidence is open; wait for its loading state to settle.
+    await screen.findByText(S.ai2.idle);
     const before = container.querySelectorAll("*").length;
     await userEvent.setup().click(screen.getByRole("button", { name: S.case.showLog }));
     expect(container.querySelector("pre")?.textContent).toHaveLength(1_000_000);
@@ -405,6 +413,7 @@ describe("the notes", () => {
     );
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     const list = screen.getByRole("list", { name: S.case.notes });
     expect(within(list).getByText("nguyen")).toBeInTheDocument();
     expect(within(list).getByText("Nguồn là 127.0.0.x trên chính máy lab.")).toBeInTheDocument();
@@ -417,6 +426,7 @@ describe("the notes", () => {
     serve(detail({ notes: [] }));
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     expect(screen.getByText(S.case.noNotes)).toBeInTheDocument();
   });
 
@@ -438,6 +448,7 @@ describe("the notes", () => {
     );
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     expect(gets).toBe(1);
     const user = userEvent.setup();
     const box = screen.getByLabelText(S.case.addNote);
@@ -461,6 +472,7 @@ describe("the notes", () => {
     client.setQueryData(["cases", 0], []);
     renderCase(client);
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     expect(client.getQueryState(["cases", 0])?.isInvalidated).toBe(false);
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(S.case.addNote), "ghi chú mới");
@@ -472,6 +484,7 @@ describe("the notes", () => {
     serve(detail());
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     const user = userEvent.setup();
     expect(screen.getByRole("button", { name: S.case.saveNote })).toBeDisabled();
     await user.type(screen.getByLabelText(S.case.addNote), "   ");
@@ -487,6 +500,7 @@ describe("the notes", () => {
     );
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(S.case.addNote), "a note");
     await user.click(screen.getByRole("button", { name: S.case.saveNote }));
@@ -500,6 +514,7 @@ describe("the conclusion", () => {
     serve(detail());
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     const group = screen.getByRole("group", { name: S.case.pickConclusion });
     const radios = within(group).getAllByRole("radio");
     expect(radios.map((r) => r.getAttribute("value")).sort()).toEqual([
@@ -525,6 +540,7 @@ describe("the conclusion", () => {
     serve(detail());
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     const incident = screen.getByRole("radio", { name: "Xác nhận sự cố" });
     expect(incident).toHaveAccessibleDescription(S.case.scopeNote);
     expect(incident.closest("[data-conclusion]")).toHaveTextContent(S.case.scopeNote);
@@ -552,6 +568,7 @@ describe("the conclusion", () => {
     );
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     const user = userEvent.setup();
     const submit = screen.getByRole("button", { name: S.case.concludeSubmit });
     expect(submit).toBeDisabled();
@@ -583,6 +600,7 @@ describe("the conclusion", () => {
     client.setQueryData(["cases", 0], []);
     renderCase(client);
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     expect(gets).toBe(1);
     const user = userEvent.setup();
     await user.click(screen.getByRole("radio", { name: "Dương tính giả" }));
@@ -617,6 +635,7 @@ describe("the conclusion", () => {
     );
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     const user = userEvent.setup();
     await user.click(screen.getByRole("radio", { name: "Xác nhận sự cố" }));
     await user.type(screen.getByLabelText(S.case.reasonRequired), "chắc chắn");
@@ -641,6 +660,7 @@ describe("the conclusion", () => {
     );
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     const user = userEvent.setup();
     await user.click(screen.getByRole("radio", { name: "Xác nhận sự cố" }));
     await user.type(screen.getByLabelText(S.case.reasonRequired), "chắc chắn");
@@ -673,6 +693,7 @@ describe("the conclusion", () => {
     );
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     const user = userEvent.setup();
     await user.click(screen.getByRole("radio", { name: "Dương tính giả" }));
     await user.type(screen.getByLabelText(S.case.reasonRequired), "lý do");
@@ -690,6 +711,7 @@ describe("the conclusion", () => {
     );
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     const user = userEvent.setup();
     await user.click(screen.getByRole("radio", { name: "Dương tính giả" }));
     await user.type(screen.getByLabelText(S.case.reasonRequired), "lý do");
@@ -703,6 +725,7 @@ describe("the conclusion", () => {
     serve(concluded());
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     const section = screen.getByRole("region", { name: S.case.conclusionHeading });
     expect(within(section).getByText("Dương tính giả")).toBeInTheDocument();
     expect(within(section).getByText("Script kiểm thử của nhóm hạ tầng")).toBeInTheDocument();
@@ -721,6 +744,7 @@ describe("the conclusion", () => {
     serve(archived());
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     const section = screen.getByRole("region", { name: S.case.conclusionHeading });
     expect(within(section).getByText("Đã lưu trữ", { selector: "strong" })).toBeInTheDocument();
     expect(within(section).getByText("DEC-212: dọn hàng đợi")).toBeInTheDocument();
@@ -730,6 +754,7 @@ describe("the conclusion", () => {
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: S.case.concludeSubmit })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: S.case.saveNote })).not.toBeInTheDocument();
+    openWorkspaceTab(S.workspace.evidence);
     const summary = screen.getByRole("region", { name: S.case.summaryLabel });
     expect(within(summary).getByText("Đã lưu trữ")).toBeInTheDocument();
     expect(within(summary).queryByText("Đang điều tra")).not.toBeInTheDocument();
@@ -753,6 +778,7 @@ describe("the conclusion", () => {
     serve(concluded({ status: "confirmed_incident" }));
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     expect(screen.getByText("Xác nhận sự cố", { selector: "strong" })).toBeInTheDocument();
     expect(screen.getByText(S.case.scopeNote)).toBeInTheDocument();
   });
@@ -761,11 +787,13 @@ describe("the conclusion", () => {
     serve(concluded({ concluded_by_name: null }));
     const { unmount } = renderCase();
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     expect(screen.getByText(S.case.concludedBy("u-9", "30/09/2026 09:00:00"))).toBeInTheDocument();
     unmount();
     serve(concluded({ concluded_by_name: null, concluded_by: null }));
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     expect(
       screen.getByText(S.case.concludedBy(S.common.missing, "30/09/2026 09:00:00")),
     ).toBeInTheDocument();
@@ -942,6 +970,7 @@ describe("going from one case to another", () => {
     await page();
     await userEvent.setup().click(screen.getByRole("link", { name: NEXT }));
     await secondTitle();
+    openWorkspaceTab(S.workspace.analysis);
     expect(await screen.findByRole("button", { name: S.ai2.analyze })).toBeInTheDocument();
 
     late.open();
@@ -969,6 +998,7 @@ describe("going from one case to another", () => {
     renderBoth();
     await page();
     expect(await screen.findByText("tóm tắt của case thứ nhất")).toBeInTheDocument();
+    expect(screen.getByText("tóm tắt của case thứ nhất")).not.toBeVisible();
     await userEvent.setup().click(screen.getByRole("link", { name: NEXT }));
 
     expect(screen.getByText(S.common.loading)).toBeInTheDocument();
@@ -978,6 +1008,7 @@ describe("going from one case to another", () => {
 
     late.open();
     await secondTitle();
+    openWorkspaceTab(S.workspace.analysis);
     expect(await screen.findByText(S.ai2.idle)).toBeInTheDocument();
     expect(screen.queryByText("tóm tắt của case thứ nhất")).not.toBeInTheDocument();
   });
@@ -1060,6 +1091,7 @@ describe("reads of one case that answer out of order", () => {
     const client = newClient();
     renderCase(client);
     await page();
+    openWorkspaceTab(S.workspace.caseDecision);
     act(() => {
       void client.invalidateQueries({ queryKey: ["case", CASE] });
     });
@@ -1176,6 +1208,7 @@ describe("when the analysis ends", () => {
     await page();
     expect(screen.getByText(S.case.neverAnalysed)).toBeInTheDocument();
     expect(screen.getByText(S.case.ongoing)).toBeInTheDocument();
+    openWorkspaceTab(S.workspace.analysis);
     await user.click(await screen.findByRole("button", { name: S.ai2.analyze }));
     await screen.findByText(S.ai2.running);
     // The 202 marked the list stale; make it fresh again, so what marks it next is the end of the run.
@@ -1192,6 +1225,7 @@ describe("when the analysis ends", () => {
 
     await wait(3000);
     expect(await screen.findByText("tóm tắt của lượt vừa xong")).toBeInTheDocument();
+    openWorkspaceTab(S.workspace.evidence);
     const summary = screen.getByRole("region", { name: S.case.summaryLabel });
     await waitFor(() => expect(within(summary).getByText(ANALYSED_SHOWN)).toBeInTheDocument());
     expect(screen.queryByText(S.case.neverAnalysed)).not.toBeInTheDocument();
@@ -1215,6 +1249,7 @@ describe("when the analysis ends", () => {
 
     await wait(3000);
     expect(await screen.findByText(S.ai2.failed)).toBeInTheDocument();
+    openWorkspaceTab(S.workspace.evidence);
     const summary = screen.getByRole("region", { name: S.case.summaryLabel });
     await waitFor(() => expect(within(summary).getByText(ANALYSED_SHOWN)).toBeInTheDocument());
     expect(server.caseGets).toBe(before + 1);
@@ -1249,6 +1284,7 @@ describe("when the analysis ends", () => {
 
       await user.click(screen.getByRole("button", { name: S.ai2.recheck }));
       expect(await screen.findByText(shown)).toBeInTheDocument();
+      openWorkspaceTab(S.workspace.evidence);
       const summary = screen.getByRole("region", { name: S.case.summaryLabel });
       await waitFor(() => expect(within(summary).getByText(ANALYSED_SHOWN)).toBeInTheDocument());
       expect(screen.queryByText(S.case.neverAnalysed)).not.toBeInTheDocument();
@@ -1306,9 +1342,10 @@ describe("the page and the ② column", () => {
     serve(detail());
     renderCase();
     await page();
+    expect(screen.getByRole("heading", { name: S.case.infoHeading })).toBeVisible();
+    openWorkspaceTab(S.workspace.analysis);
     expect(await screen.findByRole("button", { name: S.ai2.analyze })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: S.case.aiHeading })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: S.case.infoHeading })).toBeInTheDocument();
   });
 
   // DEC-221: the line at the right of the panel's heading is the page's, which knows the case.
@@ -1324,6 +1361,7 @@ describe("the page and the ② column", () => {
     );
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.analysis);
     const column = await screen.findByRole("region", { name: S.case.aiHeading });
     expect(
       within(column).getByText("Case 0b30b853 · 3 cụm · lab-ubuntu-01, lab-win-02"),
@@ -1346,6 +1384,7 @@ describe("the page and the ② column", () => {
     );
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.analysis);
     expect(await screen.findByText(S.ai2.idleClosed)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: S.ai2.analyze })).not.toBeInTheDocument();
   });
@@ -1366,6 +1405,7 @@ describe("the page and the ② column", () => {
     );
     renderCase();
     await page();
+    openWorkspaceTab(S.workspace.analysis);
     expect(await screen.findByText(S.ai2.idleClosed)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: S.ai2.analyze })).not.toBeInTheDocument();
   });
@@ -1382,7 +1422,11 @@ describe("accessibility", () => {
     serve(detail({ ongoing: true, ongoing_last_seen: "2026-09-30T02:30:00+00:00" }));
     const { container } = renderCase();
     await page();
+    expect(await scan(container)).toEqual([]);
+    openWorkspaceTab(S.workspace.analysis);
     await screen.findByRole("button", { name: S.ai2.analyze });
+    expect(await scan(container)).toEqual([]);
+    openWorkspaceTab(S.workspace.caseDecision);
     expect(await scan(container)).toEqual([]);
   });
 
@@ -1393,4 +1437,18 @@ describe("accessibility", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: S.case.showLog }));
     expect(await scan(container)).toEqual([]);
   });
+});
+
+it("preserves the unsent note when switching to evidence and back", async () => {
+  serve(detail());
+  renderCase();
+  await page();
+  const user = userEvent.setup();
+  const noteTab = screen.getByRole("tab", { name: "Ghi chú và kết luận" });
+  await user.click(noteTab);
+  await user.type(screen.getByRole("textbox", { name: S.case.addNote }), "Đợi nhật ký gốc");
+  await user.click(screen.getByRole("tab", { name: "Bằng chứng" }));
+  expect(screen.queryByRole("textbox", { name: S.case.addNote })).not.toBeInTheDocument();
+  await user.click(noteTab);
+  expect(screen.getByRole("textbox", { name: S.case.addNote })).toHaveValue("Đợi nhật ký gốc");
 });

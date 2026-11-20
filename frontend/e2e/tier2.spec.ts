@@ -13,6 +13,7 @@ import {
   userIdOf,
   usernameOf,
   waitForStatus,
+  openWorkspaceTab,
 } from "./fixtures";
 
 /** How the API and the page name the two Tier 2 users (the username: notes and conclusions carry it as `*_name`). */
@@ -47,6 +48,7 @@ test("Tier 1 escalates, Tier 2 analyses, notes and concludes, and a second concl
 
   await loginAs(page, "t1");
   await page.goto(`/alerts/${head.id}`);
+  await openWorkspaceTab(page, S.workspace.alertDecision);
   await page.getByRole("button", { name: S.decision.acknowledge }).click();
   await expect(toast(page, S.decision.acknowledged)).toBeVisible();
   // The form says, before the button is pressed, that only this alert goes into the case.
@@ -80,10 +82,11 @@ test("Tier 1 escalates, Tier 2 analyses, notes and concludes, and a second concl
   // ---- Tier 2 finds the case and asks ② to analyse it.
   await loginAs(page, "t2");
   await expect(page.getByRole("heading", { name: S.case.listTitle })).toBeVisible();
-  await page.getByRole("link", { name: title }).click();
+  await page.getByRole("link", { name: title, exact: true }).click();
   await expect(page).toHaveURL(`/cases/${id}`);
   await expect(page.getByRole("heading", { name: title })).toBeVisible();
 
+  await openWorkspaceTab(page, S.workspace.analysis);
   await page.getByRole("button", { name: S.ai2.analyze, exact: true }).click();
   // The worker takes the job, the stub answers, and the page (polling while it runs) shows the scorecard of the
   // result (DEC-221): four tiles over five tabs. The panel is headed as the approved mock-up has it, with the case
@@ -171,6 +174,7 @@ test("Tier 1 escalates, Tier 2 analyses, notes and concludes, and a second concl
 
   // ---- A note.
   const note = `Checked with the owner of ${head.agent}: routine.`;
+  await openWorkspaceTab(page, S.workspace.caseDecision);
   await page.getByLabel(S.case.addNote, { exact: true }).fill(note);
   await page.getByRole("button", { name: S.case.saveNote }).click();
   await expect(page.getByText(note)).toBeVisible();
@@ -182,6 +186,7 @@ test("Tier 1 escalates, Tier 2 analyses, notes and concludes, and a second concl
     const second = await other.newPage();
     await loginAs(second, "t2b");
     await second.goto(`/cases/${id}`);
+    await openWorkspaceTab(second, S.workspace.caseDecision);
     const later = conclusionForm(second);
     await later.choose(S.conclusion.concluded_fp).check();
     await later.reason.fill("Also read the case; closing as noise as well.");

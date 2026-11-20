@@ -67,6 +67,7 @@ export type HighlightWords = {
 };
 
 export const S = {
+  appearance: { label: "Giao diện", light: "Sáng", dark: "Tối" },
   app: {
     name: "AI Support SOC",
   },
@@ -817,6 +818,18 @@ export const S = {
     timeout: "Hết thời gian xử lý, chưa ghi gì — thử lại",
   },
 
+  workspace: {
+    preview: "Xem nhanh",
+    previewRow: (title: string) => `Xem nhanh: ${title}`,
+    openAlert: "Mở cảnh báo",
+    openCase: "Mở case",
+    sections: "Nội dung chi tiết",
+    evidence: "Bằng chứng",
+    analysis: "Phân tích AI",
+    alertDecision: "Quyết định xử lý",
+    alertAction: "Xử lý cảnh báo",
+    caseDecision: "Ghi chú và kết luận",
+  },
   case: {
     listTitle: "Danh sách case",
     empty: "Chưa có case nào.",
@@ -3026,6 +3039,7 @@ export const S = {
       clear: "Xoá bộ lọc",
     },
     tableLabel: "Danh sách IOC",
+    statistics: "Chỉ số và biểu đồ IOC",
     valueNote:
       "URL, tên miền và IP hiển thị ở dạng đã vô hiệu hoá (hxxp://, [.]) và chỉ là chữ, không bao giờ là liên kết. Nút Sao chép lấy giá trị gốc.",
     col: {

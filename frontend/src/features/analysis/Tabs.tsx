@@ -8,7 +8,22 @@ import { FOCUS } from "./styles";
 
 export type TabDef = { id: string; label: string; content: ReactNode };
 
-export function Tabs({ label, tabs }: { label: string; tabs: readonly TabDef[] }) {
+export function Tabs({
+  label,
+  tabs,
+  keepMounted = false,
+  header,
+}: {
+  label: string;
+  tabs: readonly TabDef[];
+  keepMounted?: boolean;
+  header?: {
+    before?: ReactNode;
+    title: ReactNode;
+    after?: ReactNode;
+    action?: { tab: string; label: string };
+  };
+}) {
   const base = useId();
   const [picked, setPicked] = useState<string | null>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
@@ -16,11 +31,14 @@ export function Tabs({ label, tabs }: { label: string; tabs: readonly TabDef[] }
   const open = tabs.find((tab) => tab.id === picked) ?? tabs[0];
   if (open === undefined) return null;
 
+  const select = (id: string) => {
+    setPicked(id);
+    buttons.current.get(id)?.focus();
+  };
+
   const go = (index: number): void => {
     const next = tabs[(index + tabs.length) % tabs.length];
-    if (next === undefined) return;
-    setPicked(next.id);
-    buttons.current.get(next.id)?.focus();
+    if (next !== undefined) select(next.id);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number): void => {
@@ -46,8 +64,27 @@ export function Tabs({ label, tabs }: { label: string; tabs: readonly TabDef[] }
   const tabId = (id: string): string => `${base}-tab-${id}`;
   const panelId = (id: string): string => `${base}-panel-${id}`;
 
+  const action = header?.action;
   return (
-    <div className="space-y-3.5">
+    <div className="min-w-0 space-y-3.5">
+      {header && (
+        <div className="space-y-2">
+          {header.before}
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            {header.title}
+            {action && (
+              <button
+                type="button"
+                className="soc-detail-action"
+                onClick={() => select(action.tab)}
+              >
+                {action.label}
+              </button>
+            )}
+          </div>
+          {header.after}
+        </div>
+      )}
       <div
         role="tablist"
         aria-label={label}
@@ -66,7 +103,7 @@ export function Tabs({ label, tabs }: { label: string; tabs: readonly TabDef[] }
               role="tab"
               id={tabId(tab.id)}
               aria-selected={selected}
-              aria-controls={selected ? panelId(tab.id) : undefined}
+              aria-controls={selected || keepMounted ? panelId(tab.id) : undefined}
               tabIndex={selected ? 0 : -1}
               onClick={() => setPicked(tab.id)}
               onKeyDown={(event) => onKeyDown(event, index)}
@@ -81,15 +118,19 @@ export function Tabs({ label, tabs }: { label: string; tabs: readonly TabDef[] }
           );
         })}
       </div>
-      <div
-        role="tabpanel"
-        id={panelId(open.id)}
-        aria-labelledby={tabId(open.id)}
-        tabIndex={0}
-        className={`rounded ${FOCUS}`}
-      >
-        {open.content}
-      </div>
+      {(keepMounted ? tabs : [open]).map((tab) => (
+        <div
+          key={keepMounted ? tab.id : "open"}
+          role="tabpanel"
+          id={panelId(tab.id)}
+          aria-labelledby={tabId(tab.id)}
+          tabIndex={0}
+          hidden={tab.id !== open.id}
+          className={`min-w-0 rounded ${FOCUS}`}
+        >
+          {tab.content}
+        </div>
+      ))}
     </div>
   );
 }

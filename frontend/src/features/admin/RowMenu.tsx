@@ -28,7 +28,7 @@ export type RowMenuItem = {
 };
 
 const BUTTON =
-  "h-[34px] rounded-md border border-[#2e3a48] px-3 text-[13px] text-[#c9d3df] hover:bg-ground focus-visible:outline-2 focus-visible:outline-text disabled:cursor-not-allowed disabled:opacity-50";
+  "h-[34px] rounded-md border border-console-outline px-3 text-[13px] text-console-body hover:bg-ground focus-visible:outline-2 focus-visible:outline-text disabled:cursor-not-allowed disabled:opacity-50";
 
 export function RowMenu({
   label,

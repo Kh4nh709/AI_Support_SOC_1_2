@@ -135,7 +135,7 @@ export function KnowledgePage() {
     <div className="space-y-5">
       <div className="flex flex-col gap-1">
         <h1 className="text-[26px] font-semibold">{S.admin.title.knowledge}</h1>
-        <p className="text-sm text-[#aeb9c6]">{K.subtitle}</p>
+        <p className="text-sm text-console-secondary">{K.subtitle}</p>
       </div>
 
       {notice !== null && <Toast onClose={() => setNotice(null)}>{notice}</Toast>}
@@ -164,7 +164,7 @@ export function KnowledgePage() {
               className={`-mb-px rounded-t-md border-b-2 px-4 py-2.5 text-sm focus-visible:outline-2 focus-visible:outline-text ${
                 tab === name
                   ? "border-blue-500 font-semibold text-text"
-                  : "border-transparent text-[#aeb9c6] hover:text-text"
+                  : "border-transparent text-console-secondary hover:text-text"
               }`}
             >
               {K.tab[name]}
@@ -220,7 +220,7 @@ function ListFrame<T>({
   }
   if (rows.length === 0) {
     return (
-      <p className={`${PANEL} p-5 text-[13.5px] leading-relaxed text-[#c9d3df]`}>{K.empty[tab]}</p>
+      <p className={`${PANEL} p-5 text-[13.5px] leading-relaxed text-console-body`}>{K.empty[tab]}</p>
     );
   }
   return (
@@ -357,7 +357,7 @@ function DraftList({
       query={query}
       head={(rows) =>
         status === "pending" ? (
-          <p className="px-1 text-sm text-[#aeb9c6]">
+          <p className="px-1 text-sm text-console-secondary">
             {K.pendingCount(
               rows.length,
               rows.filter((row) => row.conflict_with_entry !== null).length,

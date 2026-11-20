@@ -1,5 +1,4 @@
-// The alert page (spec §3.2, /alerts/:alertId): two columns, what Wazuh sent and the console added on the
-// left, the ① analysis on the right, and the decision panel at the foot of the left column. TanStack Query
+// The alert page presents Wazuh evidence, the ① analysis, and analyst decisions in tabs. TanStack Query
 // owns the read (key ["alert", id]): the live socket refetches it when the server says the alert changed,
 // and with no socket the page asks again every 30 s. The ① state is not decided here: the column asks
 // `aiStateOfView`, which reads what the server sent and nothing else.
@@ -10,10 +9,12 @@ import { ApiError } from "../../api/client";
 import { fetchAlertView, type AlertView } from "../../api/tier1";
 import { useAuth } from "../../auth/AuthProvider";
 import { PageError } from "../../components/PageError";
+import { BandBadge } from "../../components/Badge";
+import { Tabs, type TabDef } from "../analysis/Tabs";
 import { useLiveStatus } from "../../live/LiveProvider";
 import { OFFLINE_POLL_MS, PENDING_POLL_MS } from "../../live/poll";
 import type { LiveStatus } from "../../live/socket";
-import { S } from "../../strings";
+import { S, labelOf } from "../../strings";
 import { aiStateOfView } from "./aiState";
 import { AiColumn } from "./AiColumn";
 import {
@@ -50,7 +51,11 @@ export function AlertPage() {
   const { alertId } = useParams();
   if (!alertId) return <PageError title={S.alert.notFound} />;
   // A new id is a new page: what was typed and said on the last one stays with it.
-  return <AlertScreen key={alertId} alertId={alertId} />;
+  return (
+    <div className="soc-workspace min-w-0">
+      <AlertScreen key={alertId} alertId={alertId} />
+    </div>
+  );
 }
 
 function AlertScreen({ alertId }: { alertId: string }) {
@@ -99,27 +104,12 @@ function AlertScreen({ alertId }: { alertId: string }) {
   }
 
   const isDuplicate = view.alert_id !== alertId;
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
-        <Link to="/queue" className={LINK}>
-          {S.nav.queue}
-        </Link>
-        <span aria-hidden="true">/</span>
-        {isDuplicate && (
-          <>
-            <Link to={`/alerts/${encodeURIComponent(view.alert_id)}`} className={LINK}>
-              {view.alert_id}
-            </Link>
-            <span aria-hidden="true">/</span>
-          </>
-        )}
-        <span className="break-all">{alertId}</span>
-      </div>
-      <h1 className="text-lg font-semibold break-words">{view.description || view.alert_id}</h1>
-      {isDuplicate && <p className="text-sm text-muted">{S.alert.duplicateOf(view.alert_id)}</p>}
-
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_520px]">
+  const canDecide = session?.role === "tier1";
+  const sections: TabDef[] = [
+    {
+      id: "evidence",
+      label: S.workspace.evidence,
+      content: (
         <section aria-labelledby={infoHeading} className="min-w-0 space-y-5">
           <div>
             <h2 id={infoHeading} className="text-xs font-semibold tracking-wide text-muted">
@@ -141,10 +131,66 @@ function AlertScreen({ alertId }: { alertId: string }) {
           <Enrichment view={view} />
           <Correlation view={view} />
           <Playbook view={view} />
-          {session && <DecisionPanel view={view} me={session} />}
         </section>
-        <AiColumn view={view} />
-      </div>
-    </div>
+      ),
+    },
+    { id: "analysis", label: S.workspace.analysis, content: <AiColumn view={view} /> },
+  ];
+  if (canDecide) {
+    sections.push({
+      id: "decision",
+      label: S.workspace.alertDecision,
+      content: <DecisionPanel view={view} me={session} />,
+    });
+  }
+
+  return (
+    <Tabs
+      label={S.workspace.sections}
+      tabs={sections}
+      keepMounted
+      header={{
+        before: (
+          <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
+            <Link to="/queue" className={LINK}>
+              {S.nav.queue}
+            </Link>
+            <span aria-hidden="true">/</span>
+            {isDuplicate && (
+              <>
+                <Link
+                  to={`/alerts/${encodeURIComponent(view.alert_id)}`}
+                  className={`${LINK} break-all`}
+                >
+                  {view.alert_id}
+                </Link>
+                <span aria-hidden="true">/</span>
+              </>
+            )}
+            <span className="break-all">{alertId}</span>
+          </div>
+        ),
+        title: (
+          <h1 className="min-w-0 text-2xl font-semibold tracking-tight [overflow-wrap:anywhere] sm:text-3xl">
+            {view.description || view.alert_id}
+          </h1>
+        ),
+        action: canDecide ? { tab: "decision", label: S.workspace.alertAction } : undefined,
+        after: (
+          <>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+              <BandBadge label={view.risk_band ?? null} />
+              <span>{labelOf(S.status, view.status)}</span>
+              {view.acknowledged_by_name && (
+                <span className="text-muted break-all">{view.acknowledged_by_name}</span>
+              )}
+            </div>
+            {isDuplicate && (
+              <p className="text-sm text-muted">{S.alert.duplicateOf(view.alert_id)}</p>
+            )}
+          </>
+        ),
+      }}
+    />
   );
 }

@@ -5,11 +5,11 @@
 // non-test source of features/soar/ and of everything it reaches, and holds the reach into features/admin/ to ONE file, the
 // shared ConfirmDialog (the repo's own dialog: its focus, Tab and Escape), which needs nothing of the console but the strings.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, join, normalize } from "node:path";
+import { basename, dirname, join, normalize, sep } from "node:path";
 
 const SRC = "src";
 const SOAR = join(SRC, "features", "soar");
-const ADMIN = join(SRC, "features", "admin") + "/";
+const ADMIN = join(SRC, "features", "admin") + sep;
 
 /** The code of a source with its comments taken out, so a comment that quotes an import is not one. */
 const codeOf = (text: string): string =>
@@ -57,7 +57,7 @@ describe("the SOAR page and the console's chunk", () => {
   const own = sources(SOAR).filter((path) => !/(testkit|fixtures)\./.test(path));
 
   it("reads the files of the page (a guard over none would pass for nothing)", () => {
-    expect(own.map((path) => path.split("/").at(-1))).toEqual(
+    expect(own.map((path) => basename(path))).toEqual(
       expect.arrayContaining([
         "SoarPage.tsx",
         "DetailPanel.tsx",
@@ -82,7 +82,7 @@ describe("the SOAR page and the console's chunk", () => {
 
   it("is not imported back by the console (the console is lazy; the page is not)", () => {
     const back = sources(join(SRC, "features", "admin"))
-      .filter((path) => importsOf(path).some((target) => target.startsWith(SOAR + "/")))
+      .filter((path) => importsOf(path).some((target) => target.startsWith(SOAR + sep)))
       .sort();
     expect(back).toEqual([]);
   });

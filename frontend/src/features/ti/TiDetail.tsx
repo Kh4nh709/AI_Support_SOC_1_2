@@ -74,7 +74,7 @@ export function TiDetail({ ioc, onClose }: { ioc: TiIoc; onClose: () => void }) 
       aria-labelledby={titleId}
       tabIndex={-1}
       onKeyDown={onKeyDown}
-      className="order-first flex w-full min-w-0 flex-col gap-4 rounded border border-border bg-surface p-4 focus:outline-none lg:order-last lg:w-[30rem] lg:max-w-[40%] lg:shrink-0 lg:self-start"
+      className="flex w-full min-w-0 flex-col gap-4 rounded border border-border bg-surface p-4 focus:outline-none"
     >
       <div className="flex items-start justify-between gap-3">
         <h2 id={titleId} className="min-w-0 text-base font-semibold wrap-anywhere">

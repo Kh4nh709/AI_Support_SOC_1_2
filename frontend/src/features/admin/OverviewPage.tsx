@@ -75,7 +75,7 @@ export function OverviewPage() {
           {/* The error of the page has the h1 of its own: there is one h1 in every state. */}
           {!unreadable && <h1 className="text-[26px] font-semibold">{S.admin.title.overview}</h1>}
           {data !== undefined && (
-            <span className="text-sm text-[#aeb9c6]">
+            <span className="text-sm text-console-secondary">
               {P.updated(formatTime(isoOf(overview.dataUpdatedAt)))}
             </span>
           )}
@@ -91,7 +91,7 @@ export function OverviewPage() {
               const picked = ADMIN_RANGES.find((r) => r === event.target.value);
               if (picked !== undefined) setRange(picked);
             }}
-            className="h-10 w-[170px] rounded-md border border-[#2e3a48] bg-[#0f141b] px-2.5 text-sm text-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-text"
+            className="h-10 w-[170px] rounded-md border border-console-outline bg-console-inset px-2.5 text-sm text-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-text"
           >
             {ADMIN_RANGES.map((r) => (
               <option key={r} value={r}>
@@ -113,7 +113,7 @@ export function OverviewPage() {
           {overview.isRefetchError && (
             <div
               role="alert"
-              className="flex items-center gap-3 rounded-lg border border-[#5a3a14] bg-[#2a1a0a] px-3.5 py-2.5 text-[13.5px] text-[#fcd9a8]"
+              className="flex items-center gap-3 rounded-lg border border-console-warning-outline bg-high-bg px-3.5 py-2.5 text-[13.5px] text-console-warning-text"
             >
               <span className="grow">
                 {P.refreshFailed(formatTime(isoOf(overview.dataUpdatedAt)))}
@@ -207,7 +207,7 @@ function OverviewBody({
       {emptyRange && (
         <div className={`flex flex-col gap-2 ${PANEL}`}>
           <h2 className="text-[17px] font-semibold">{P.emptyRange(S.admin.range[range])}</h2>
-          <p className="text-[13.5px] leading-relaxed text-[#c9d3df]">{P.emptyRangeHint}</p>
+          <p className="text-[13.5px] leading-relaxed text-console-body">{P.emptyRangeHint}</p>
         </div>
       )}
 
@@ -287,7 +287,7 @@ function LlmTile({ month }: { month: LlmMonth }) {
     <Tile
       label={P.kpi.llmCost}
       value={formatSpend(spent_usd)}
-      sub={state === "stopped" ? <span className="text-[#fda4af]">{sub}</span> : sub}
+      sub={state === "stopped" ? <span className="text-console-danger-text">{sub}</span> : sub}
     />
   );
 }

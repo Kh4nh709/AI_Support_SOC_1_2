@@ -57,30 +57,30 @@ const REFRESH_MS = 60_000;
 const RANGE_ORDER: readonly LlmRange[] = ["month", ...LLM_RANGES.filter((r) => r !== "month")];
 
 const PANEL = "flex flex-col gap-3 rounded-[10px] border border-border bg-surface px-5 py-[18px]";
-const MUTED = "text-[#aeb9c6]";
-const AMBER = "text-[#fcd9a8]";
+const MUTED = "text-console-secondary";
+const AMBER = "text-console-warning-text";
 const NUMBER = "text-right tabular-nums";
 
 // --- the tiles ----------------------------------------------------------------------------------------------
 
 const TILE_BORDER: Record<CostState, string> = {
   ok: "border-border",
-  warn: "border-[#5a3a14]",
-  stopped: "border-[#5a2e36]",
+  warn: "border-console-warning-outline",
+  stopped: "border-console-danger-outline",
 };
 const VALUE_TONE: Record<CostState, string> = {
   ok: "",
   warn: AMBER,
-  stopped: "text-[#fda4af]",
+  stopped: "text-console-danger-text",
 };
 // Whole class names: Tailwind finds a class by reading the source. The two pseudo-elements are how a
 // `<progress>` is painted (WebKit and Firefox), since an inline style cannot be.
 const BAR_BASE =
-  "h-2 w-full appearance-none overflow-hidden rounded bg-[#1f2833] [&::-webkit-progress-bar]:bg-[#1f2833]";
+  "h-2 w-full appearance-none overflow-hidden rounded bg-console-divider [&::-webkit-progress-bar]:bg-console-divider";
 const BAR_TONE: Record<CostState, string> = {
-  ok: "[&::-webkit-progress-value]:bg-[#5b8def] [&::-moz-progress-bar]:bg-[#5b8def]",
-  warn: "[&::-webkit-progress-value]:bg-[#f59e0b] [&::-moz-progress-bar]:bg-[#f59e0b]",
-  stopped: "[&::-webkit-progress-value]:bg-[#f87171] [&::-moz-progress-bar]:bg-[#f87171]",
+  ok: "[&::-webkit-progress-value]:bg-console-interactive [&::-moz-progress-bar]:bg-console-interactive",
+  warn: "[&::-webkit-progress-value]:bg-console-warning-marker [&::-moz-progress-bar]:bg-console-warning-marker",
+  stopped: "[&::-webkit-progress-value]:bg-console-danger-marker [&::-moz-progress-bar]:bg-console-danger-marker",
 };
 
 function Tile({
@@ -145,7 +145,7 @@ function CostTile({ month }: { month: LlmUsage["month"] }) {
       {state === "stopped" && (
         <div
           role="alert"
-          className="rounded-lg border border-[#5a2e36] bg-[#2a1016] px-3 py-2.5 text-[13px] leading-snug text-[#fda4af]"
+          className="rounded-lg border border-console-danger-outline bg-critical-bg px-3 py-2.5 text-[13px] leading-snug text-console-danger-text"
         >
           {L.cost.stopped}
         </div>
@@ -280,7 +280,7 @@ function ByPipeline({ data }: { data: LlmUsage }) {
           <h3 className="text-[17px] font-semibold">
             {L.noCalls.title(S.admin.range[data.range].toLowerCase())}
           </h3>
-          <p className="text-[13.5px] leading-relaxed text-[#c9d3df]">{L.noCalls.body}</p>
+          <p className="text-[13.5px] leading-relaxed text-console-body">{L.noCalls.body}</p>
         </div>
       ) : (
         <DataTable
@@ -329,7 +329,7 @@ const QUOTA_COLUMNS: Column<QuotaUser>[] = [
       user.remaining === null ? (
         S.common.missing
       ) : user.remaining === 0 ? (
-        <span className="font-semibold text-[#fda4af]">{L.quota.exhausted}</span>
+        <span className="font-semibold text-console-danger-text">{L.quota.exhausted}</span>
       ) : (
         formatCount(user.remaining)
       ),
@@ -362,7 +362,7 @@ function Quota({ quota }: { quota: LlmUsage["quota"] }) {
 // --- recent calls -----------------------------------------------------------------------------------------------
 
 const LINK =
-  "font-mono text-[#7fb0ff] underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-text";
+  "font-mono text-console-link underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-text";
 
 /**
  * A run on an alert that is blind and not yet decided comes with no subject and no outcome (DEC-101, context pack
@@ -473,7 +473,7 @@ function Recent({ runs }: { runs: readonly RecentRun[] }) {
 
 // --- loading and failing -----------------------------------------------------------------------------------------
 
-const SKELETON = "animate-pulse rounded-lg bg-[#1a222c]";
+const SKELETON = "animate-pulse rounded-lg bg-console-raised";
 
 /** The page's own title and the layout's blocks, so nothing jumps when the data arrives. */
 function Skeleton() {
@@ -527,7 +527,7 @@ export function LlmPage() {
       return (
         <div className="space-y-3">
           <PageError title={S.admin.common.loadError} onRetry={() => void query.refetch()} />
-          <p className="text-[13.5px] leading-relaxed text-[#c9d3df]">
+          <p className="text-[13.5px] leading-relaxed text-console-body">
             {loadErrorHint(query.error)}
           </p>
         </div>
@@ -551,7 +551,7 @@ export function LlmPage() {
           <select
             value={range}
             onChange={(event) => setRange(event.target.value as LlmRange)}
-            className="h-10 w-44 rounded-md border border-[#2e3a48] bg-[#0f141b] px-2.5 text-sm text-text focus-visible:outline-2 focus-visible:outline-text"
+            className="h-10 w-44 rounded-md border border-console-outline bg-console-inset px-2.5 text-sm text-text focus-visible:outline-2 focus-visible:outline-text"
           >
             {RANGE_ORDER.map((name) => (
               <option key={name} value={name}>
@@ -566,13 +566,13 @@ export function LlmPage() {
       {query.isError && (
         <div
           role="alert"
-          className="flex items-center justify-between gap-3 rounded-lg border border-[#5a3a14] bg-[#2a1a0a] px-3.5 py-2.5 text-[13.5px] text-[#fcd9a8]"
+          className="flex items-center justify-between gap-3 rounded-lg border border-console-warning-outline bg-high-bg px-3.5 py-2.5 text-[13.5px] text-console-warning-text"
         >
           <span>{L.refreshFailed}</span>
           <button
             type="button"
             onClick={() => void query.refetch()}
-            className="rounded border border-[#5a3a14] px-2 py-0.5 text-xs hover:bg-ground focus-visible:outline-2 focus-visible:outline-text"
+            className="rounded border border-console-warning-outline px-2 py-0.5 text-xs hover:bg-ground focus-visible:outline-2 focus-visible:outline-text"
           >
             {S.common.retry}
           </button>

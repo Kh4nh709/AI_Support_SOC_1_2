@@ -37,11 +37,11 @@ function lengthOf(text: string): number {
 
 // Whole class names: Tailwind finds a class by reading the source.
 const CHOICE =
-  "flex cursor-pointer items-start gap-2.5 rounded-lg border border-[#2e3a48] px-3 py-2.5 text-[13.5px] has-checked:border-[#5b8def] has-checked:bg-[#13203a] has-focus-visible:outline-2 has-focus-visible:outline-text";
+  "flex cursor-pointer items-start gap-2.5 rounded-lg border border-console-outline px-3 py-2.5 text-[13.5px] has-checked:border-console-interactive has-checked:bg-console-selected has-focus-visible:outline-2 has-focus-visible:outline-text";
 const CONFIDENCE =
-  "flex h-10 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-[#2e3a48] text-[13px] has-checked:border-[#5b8def] has-checked:bg-[#13203a] has-focus-visible:outline-2 has-focus-visible:outline-text";
+  "flex h-10 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-console-outline text-[13px] has-checked:border-console-interactive has-checked:bg-console-selected has-focus-visible:outline-2 has-focus-visible:outline-text";
 const BUTTON_OFF = "disabled:cursor-not-allowed disabled:opacity-60";
-const INVALID = "text-xs text-[#fda4af]";
+const INVALID = "text-xs text-console-danger-text";
 
 export function LabelForm({
   working,
@@ -91,7 +91,7 @@ export function LabelForm({
   return (
     <section
       aria-labelledby={titleId}
-      className="sticky top-4 flex w-[340px] shrink-0 flex-col gap-3.5 rounded-[10px] border border-[#3a4757] bg-surface px-[22px] py-5"
+      className="sticky top-4 flex w-[340px] shrink-0 flex-col gap-3.5 rounded-[10px] border border-console-outline-strong bg-surface px-[22px] py-5"
     >
       <h2 id={titleId} className="text-[17px] font-semibold">
         {F.title}
@@ -101,7 +101,7 @@ export function LabelForm({
           aria-describedby={labelMissing ? labelErrorId : undefined}
           className="m-0 flex flex-col gap-2 border-none p-0"
         >
-          <legend className="mb-1.5 text-[13px] text-[#aeb9c6]">{F.label}</legend>
+          <legend className="mb-1.5 text-[13px] text-console-secondary">{F.label}</legend>
           {LABEL_CHOICES.map((choice, index) => (
             <label key={choice} className={CHOICE}>
               <input
@@ -131,7 +131,7 @@ export function LabelForm({
         )}
 
         <fieldset className="m-0 flex flex-col gap-1.5 border-none p-0">
-          <legend className="mb-1.5 text-[13px] text-[#aeb9c6]">{F.confidence}</legend>
+          <legend className="mb-1.5 text-[13px] text-console-secondary">{F.confidence}</legend>
           <div className="grid grid-cols-3 gap-1.5">
             {LABEL_CONFIDENCES.map((level) => (
               <label key={level} className={CONFIDENCE}>
@@ -149,7 +149,7 @@ export function LabelForm({
         </fieldset>
 
         <div className="flex flex-col gap-1.5">
-          <label htmlFor={`${titleId}-note`} className="text-[13px] text-[#aeb9c6]">
+          <label htmlFor={`${titleId}-note`} className="text-[13px] text-console-secondary">
             {F.note}
           </label>
           <input
@@ -165,7 +165,7 @@ export function LabelForm({
               setNote(event.target.value);
               setNoteError(null);
             }}
-            className="box-border h-10 rounded-md border border-[#2e3a48] bg-[#0f141b] px-3 text-sm text-text focus-visible:outline-2 focus-visible:outline-text aria-invalid:border-[#f87171]"
+            className="box-border h-10 rounded-md border border-console-outline bg-console-inset px-3 text-sm text-text focus-visible:outline-2 focus-visible:outline-text aria-invalid:border-console-danger-marker"
           />
           <span id={countId} className="self-end text-xs text-muted">
             {F.noteCount(lengthOf(note), ADMIN_LIMITS.noteMax)}
@@ -180,7 +180,7 @@ export function LabelForm({
         {error !== null && (
           <div
             role="alert"
-            className="rounded-lg border border-[#5a2e36] bg-[#2a1016] px-3 py-2.5 text-[13px] leading-snug text-[#fda4af]"
+            className="rounded-lg border border-console-danger-outline bg-critical-bg px-3 py-2.5 text-[13px] leading-snug text-console-danger-text"
           >
             {error}
           </div>
@@ -200,7 +200,7 @@ export function LabelForm({
             disabled={busy}
             aria-busy={working === "undo"}
             onClick={onUndo}
-            className={`h-10 rounded-lg border border-[#2e3a48] text-sm text-[#c9d3df] hover:bg-ground focus-visible:outline-2 focus-visible:outline-text ${BUTTON_OFF}`}
+            className={`h-10 rounded-lg border border-console-outline text-sm text-console-body hover:bg-ground focus-visible:outline-2 focus-visible:outline-text ${BUTTON_OFF}`}
           >
             {working === "undo" ? F.undoing : F.undo}
           </button>

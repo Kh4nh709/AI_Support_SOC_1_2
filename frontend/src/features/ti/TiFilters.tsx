@@ -4,7 +4,7 @@
 // give `YYYY-MM-DD` only, "any confidence" (empty, or 0, the bottom of the box so that the arrows can reach it) is NO parameter, and the
 // search is at most 128 characters. The boxes belong to the page (`draft`): it knows when they say something the URL does not, and the
 // export waits for the person to send them.
-import { useId, type FormEvent } from "react";
+import { useId, useRef, type FormEvent } from "react";
 import { TI_MALWARE_MAX, TI_Q_MAX, TI_SOURCES, TI_TYPE_MAX } from "../../api/ti";
 import { S, labelOf } from "../../strings";
 import type { Draft } from "./tiParams";
@@ -13,7 +13,7 @@ const BUTTON =
   "rounded border border-border px-3 py-1 text-sm hover:bg-surface focus-visible:outline-2 focus-visible:outline-text";
 const FIELD =
   "rounded border border-border bg-ground px-2 py-1 text-sm text-text focus-visible:outline-2 focus-visible:outline-text";
-const LABEL = "flex flex-col gap-1 text-xs text-muted";
+const LABEL = "flex max-w-full flex-col gap-1 text-xs text-muted";
 
 /** The types the feeds carry today; any other lower-case token may still be typed. */
 const KNOWN_TYPES = ["ip:port", "domain", "url", "sha256_hash", "sha1_hash", "md5_hash"] as const;
@@ -34,6 +34,7 @@ export function TiFilters({
   onClear: () => void;
 }) {
   const typeList = useId();
+  const search = useRef<HTMLInputElement>(null);
   const set = (name: keyof Draft) => (value: string) => onDraft({ ...draft, [name]: value });
 
   const send = (event: FormEvent) => {
@@ -48,6 +49,19 @@ export function TiFilters({
       onSubmit={send}
       className="flex flex-wrap items-end gap-3"
     >
+      <label className={LABEL}>
+        {S.ti.filters.search}
+        <input
+          ref={search}
+          type="search"
+          value={draft.q}
+          maxLength={TI_Q_MAX}
+          onChange={(event) => set("q")(event.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+          className={`w-72 max-w-full ${FIELD}`}
+        />
+      </label>
       <label className={LABEL}>
         {S.ti.filters.source}
         <select
@@ -129,23 +143,18 @@ export function TiFilters({
           className={`w-28 ${FIELD}`}
         />
       </label>
-      <label className={LABEL}>
-        {S.ti.filters.search}
-        <input
-          type="search"
-          value={draft.q}
-          maxLength={TI_Q_MAX}
-          onChange={(event) => set("q")(event.target.value)}
-          autoComplete="off"
-          spellCheck={false}
-          className={`w-72 ${FIELD}`}
-        />
-      </label>
       <button type="submit" className={BUTTON}>
         {S.ti.filters.apply}
       </button>
-      {filtered && (
-        <button type="button" className={BUTTON} onClick={onClear}>
+      {(filtered || Object.values(draft).some(Boolean)) && (
+        <button
+          type="button"
+          className={BUTTON}
+          onClick={() => {
+            onClear();
+            search.current?.focus();
+          }}
+        >
           {S.ti.filters.clear}
         </button>
       )}

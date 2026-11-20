@@ -19,16 +19,20 @@ const table = () => screen.findByRole("table", { name: S.ti.tableLabel });
 const group = (name: string) => screen.getByRole("group", { name });
 
 describe("the layout", () => {
-  it("has the title, then the status bar, the KPI cards, the charts and the table, in that order", async () => {
+  it("puts lookup first and opens the IOC statistics on request", async () => {
     serve(server, fake());
     renderTi();
     const tbl = await table();
+    const toggle = screen.getByText(S.ti.statistics);
+    expect(toggle.closest("details")).not.toHaveAttribute("open");
+    await userEvent.click(toggle);
+    expect(toggle.closest("details")).toHaveAttribute("open");
     const title = screen.getByRole("heading", { level: 1, name: S.ti.title });
     const status = await screen.findByRole("region", { name: S.ti.status.label });
     const kpi = await screen.findByRole("region", { name: S.ti.kpi.label });
     const charts = await screen.findByRole("region", { name: S.ti.charts.label });
     const filters = screen.getByRole("search", { name: S.ti.filters.label });
-    const order = [title, status, kpi, charts, filters, tbl];
+    const order = [title, filters, status, tbl, kpi, charts];
     for (let i = 1; i < order.length; i += 1) {
       const before = order[i - 1] as Element;
       const after = order[i] as Element;

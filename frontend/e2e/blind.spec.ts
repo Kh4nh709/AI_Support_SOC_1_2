@@ -22,6 +22,7 @@ import {
   waitForStatus,
   waitForTriage,
   type Answer,
+  openWorkspaceTab,
 } from "./fixtures";
 import { phrasesFound, wordsFound } from "../src/testing/containsWord";
 import { MODEL_NAME } from "../src/testing/modelName";
@@ -207,7 +208,7 @@ test("a blind head shows nothing of ① until it is decided, then shows it", asy
 
   const traffic = captureTraffic(page);
   await loginAs(page, "t1");
-  const link = page.locator(`a[href="/alerts/${head.id}"]`);
+  const link = page.getByRole("link", { name: head.description, exact: true });
   const row = page.getByRole("row").filter({ has: link });
   await expect(row).toContainText(S.ai1.hidden);
   await expect(row).not.toContainText(S.ai1.action.needs_review);
@@ -215,7 +216,9 @@ test("a blind head shows nothing of ① until it is decided, then shows it", asy
 
   await link.click();
   await expect(page).toHaveURL(`/alerts/${head.id}`);
+  await openWorkspaceTab(page, S.workspace.analysis);
   await expect(page.getByText(S.ai1.hiddenBody)).toBeVisible();
+  await openWorkspaceTab(page, S.workspace.alertDecision);
   await page.getByRole("button", { name: S.decision.acknowledge }).click();
   await expect(page.getByRole("status").filter({ hasText: S.decision.acknowledged })).toBeVisible();
   await page.getByLabel(S.decision.falsePositive).check();
@@ -235,6 +238,7 @@ test("a blind head shows nothing of ① until it is decided, then shows it", asy
   }
   await expect(page.getByText(/AI kết luận/)).toHaveCount(0);
   // The AI column itself: no reason, no verdict label as a word.
+  await openWorkspaceTab(page, S.workspace.analysis);
   const column = page.getByRole("region", { name: S.alert.aiHeading });
   for (const seen of [await column.innerText(), await column.innerHTML()]) {
     expect(
@@ -275,8 +279,10 @@ test("a blind head shows nothing of ① until it is decided, then shows it", asy
   const beforeDecision = answers.length;
 
   // The decision reveals it.
+  await openWorkspaceTab(page, S.workspace.alertDecision);
   await page.getByRole("button", { name: S.decision.submit }).click();
   await expect(page.getByRole("status").filter({ hasText: S.decision.recorded })).toBeVisible();
+  await openWorkspaceTab(page, S.workspace.analysis);
   await expect(page.getByText(S.ai1.decidedHeading)).toBeVisible();
   // The decision lifts the arm: the AI column now says what the AI concluded and which checks warned (fix round 1,
   // I1; DEC-217), and "Khớp" compares the decision (closed as a false positive) with the stored verdict, `false_positive`.
@@ -319,16 +325,18 @@ test("a visible head says what the AI concluded and which of the gate's checks w
   const labels = heldLabels(head.id);
 
   await loginAs(page, "t1");
-  const link = page.locator(`a[href="/alerts/${head.id}"]`);
+  const link = page.getByRole("link", { name: head.description, exact: true });
   const row = page.getByRole("row").filter({ has: link });
   // the queue says the verdict (DEC-217): the model's own answer, never the system's Cần xem xét
   await expect(row).toContainText(S.ai1.action.false_positive);
   await expect(row).not.toContainText(S.ai1.action.needs_review);
   await link.click();
   await expect(page).toHaveURL(`/alerts/${head.id}`);
+  await openWorkspaceTab(page, S.workspace.analysis);
 
   // DEC-221: the column is the scorecard. The verdict is the first tile, the model's own answer (DEC-217); the checks
   // that warned about it are the last tile's count, a line of the Kiểm chứng tab and a highlight of the overview.
+  await openWorkspaceTab(page, S.workspace.analysis);
   const column = page.getByRole("region", { name: S.alert.aiHeading });
   const verdict = column.getByRole("group", { name: PANEL.tile.verdict });
   await expect(verdict).toContainText(S.ai1.action.false_positive);
@@ -442,9 +450,11 @@ for (const seeded of SEEDED) {
 
     const traffic = captureTraffic(page);
     await loginAs(page, "t1");
-    await page.locator(`a[href="/alerts/${head.id}"]`).click();
+    await page.getByRole("link", { name: head.description, exact: true }).click();
     await expect(page).toHaveURL(`/alerts/${head.id}`);
+    await openWorkspaceTab(page, S.workspace.analysis);
     await expect(page.getByText(S.ai1.hiddenBody)).toBeVisible();
+    await openWorkspaceTab(page, S.workspace.alertDecision);
     await page.getByRole("button", { name: S.decision.acknowledge }).click();
     await expect(
       page.getByRole("status").filter({ hasText: S.decision.acknowledged }),
@@ -459,6 +469,7 @@ for (const seeded of SEEDED) {
       expect(phrasesFound(seen, RAG_PHRASES), "the page words the RAG of a blind head").toEqual([]);
     }
     await expect(page.getByRole("note")).toHaveCount(0);
+    await openWorkspaceTab(page, S.workspace.analysis);
     const column = page.getByRole("region", { name: S.alert.aiHeading });
     expect(phrasesFound(await column.innerText(), RAG_PHRASES)).toEqual([]);
     expect(await wholeText(column), "the blind AI column says more than its notice").toBe(
@@ -476,8 +487,10 @@ for (const seeded of SEEDED) {
     const beforeDecision = answers.length;
 
     // The decision reveals it, in the same line as the rest.
+    await openWorkspaceTab(page, S.workspace.alertDecision);
     await page.getByRole("button", { name: S.decision.submit }).click();
     await expect(page.getByRole("status").filter({ hasText: S.decision.recorded })).toBeVisible();
+    await openWorkspaceTab(page, S.workspace.analysis);
     await expect(page.getByText(S.ai1.decidedHeading)).toBeVisible();
     if (seeded.kind === null) {
       await expect(column.getByText(/AI kết luận/)).toContainText(seeded.shown);

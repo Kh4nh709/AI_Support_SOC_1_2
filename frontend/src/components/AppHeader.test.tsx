@@ -37,7 +37,25 @@ function renderHeader(
   );
 }
 
-it("shows the app name as a banner, and nothing else when nobody is signed in", () => {
+it("remembers the chosen appearance after returning to the console", async () => {
+  const first = renderHeader(null);
+  try {
+    const light = screen.getByRole("radio", { name: "Sáng" });
+    await userEvent.click(light);
+    expect(light).toBeChecked();
+    expect(document.documentElement.dataset.theme).toBe("light");
+    first.unmount();
+    renderHeader(session("tier2"));
+    expect(screen.getByRole("radio", { name: "Sáng" })).toBeChecked();
+    await userEvent.click(screen.getByRole("radio", { name: "Tối" }));
+    expect(document.documentElement.dataset.theme).toBe("dark");
+  } finally {
+    localStorage.removeItem("soc.theme");
+    delete document.documentElement.dataset.theme;
+  }
+});
+
+it("shows the brand and appearance picker when signed out", () => {
   renderHeader(null);
   expect(screen.getByRole("banner")).toHaveTextContent(S.app.name);
   expect(screen.queryByRole("navigation")).not.toBeInTheDocument();

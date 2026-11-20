@@ -22,7 +22,7 @@ const K = S.admin.labelsPage.correlation;
 const PANEL = "flex flex-col gap-3 rounded-[10px] border border-border bg-surface px-5 py-4";
 const MONO = "font-mono";
 const PRE =
-  "m-0 rounded-lg border border-[#1f2833] bg-[#0a0e13] px-3.5 py-3 font-mono text-xs leading-[1.55] break-words whitespace-pre-wrap text-[#c9d3df]";
+  "m-0 rounded-lg border border-console-divider bg-console-code-surface px-3.5 py-3 font-mono text-xs leading-[1.55] break-words whitespace-pre-wrap text-console-body";
 
 /** A field that came as null (or empty) is a dash, never the word "null". */
 function orDash(value: string | number | null): string {
@@ -44,15 +44,15 @@ export function ClusterHead({ cluster, ref }: { cluster: LabelCluster; ref?: Ref
       ref={ref}
       tabIndex={-1}
       aria-label={C.label}
-      className="flex flex-wrap items-center gap-2.5 rounded-[10px] border border-[#263241] bg-surface px-4 py-3 text-[13.5px] focus-visible:outline-2 focus-visible:outline-text"
+      className="flex flex-wrap items-center gap-2.5 rounded-[10px] border border-border bg-surface px-4 py-3 text-[13.5px] focus-visible:outline-2 focus-visible:outline-text"
     >
       <span className="font-bold">{orDash(cluster.category)}</span>
       <Badge band={bandOf(cluster.severity)}>{orDash(cluster.severity)}</Badge>
-      <span className="text-[#aeb9c6]">
+      <span className="text-console-secondary">
         {C.rule} <span className={`${MONO} text-text`}>{orDash(cluster.rule_id)}</span>{" "}
         <span>{C.level(orDash(cluster.rule_level))}</span>
       </span>
-      <span className="text-[#aeb9c6]">
+      <span className="text-console-secondary">
         {C.clusterId} <span className={`${MONO} text-text`}>{cluster.gold_cluster_id}</span>
       </span>
     </section>
@@ -81,7 +81,7 @@ function AlertPanel({ cluster }: { cluster: LabelCluster }) {
         <dd className="break-words">{orDash(cluster.description)}</dd>
       </dl>
       <div className="flex flex-col gap-1.5">
-        <h3 className="text-[13px] font-semibold text-[#aeb9c6]">{C.rawLog}</h3>
+        <h3 className="text-[13px] font-semibold text-console-secondary">{C.rawLog}</h3>
         <LogBlock text={cluster.raw_log} />
         {cluster.raw_log_truncated_for_display && (
           <p className="text-xs text-muted">{C.rawLogCut}</p>
@@ -117,12 +117,12 @@ const ROW_COLUMNS: Column<CorrelationRow>[] = [
   {
     id: "first",
     header: K.colFirst,
-    cell: (row) => <span className="text-[#aeb9c6]">{formatTime(row.first_seen)}</span>,
+    cell: (row) => <span className="text-console-secondary">{formatTime(row.first_seen)}</span>,
   },
   {
     id: "last",
     header: K.colLast,
-    cell: (row) => <span className="text-[#aeb9c6]">{formatTime(row.last_seen)}</span>,
+    cell: (row) => <span className="text-console-secondary">{formatTime(row.last_seen)}</span>,
   },
 ];
 
@@ -138,8 +138,8 @@ function Sample({ sample }: { sample: CorrelationSample }) {
   const description =
     sample.description === null || sample.description === "" ? "" : ` — ${sample.description}`;
   return (
-    <details className="border-t border-[#1f2833] pt-2.5">
-      <summary className="cursor-pointer text-[13px] text-[#c9d3df] focus-visible:outline-2 focus-visible:outline-text">
+    <details className="border-t border-console-divider pt-2.5">
+      <summary className="cursor-pointer text-[13px] text-console-body focus-visible:outline-2 focus-visible:outline-text">
         {facts}
         {description}
       </summary>
@@ -157,7 +157,7 @@ function Correlation({ cluster }: { cluster: LabelCluster }) {
         {K.title}
       </h2>
       {rows.length === 0 ? (
-        <p className="text-[13.5px] text-[#c9d3df]">{K.empty}</p>
+        <p className="text-[13.5px] text-console-body">{K.empty}</p>
       ) : (
         <DataTable
           label={K.table}

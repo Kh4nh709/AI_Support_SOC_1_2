@@ -14,10 +14,10 @@ export const BUTTON_PRIMARY =
 export const BUTTON_OUTLINE =
   "h-10 rounded-lg border border-border px-3.5 text-sm text-text hover:bg-ground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text disabled:cursor-not-allowed disabled:opacity-50";
 export const BUTTON_DANGER =
-  "h-10 rounded-lg border border-[#5a2e36] px-3.5 text-sm text-[#fda4af] hover:bg-ground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text disabled:cursor-not-allowed disabled:opacity-50";
+  "h-10 rounded-lg border border-console-danger-outline px-3.5 text-sm text-console-danger-text hover:bg-ground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text disabled:cursor-not-allowed disabled:opacity-50";
 export const FIELD_CLASS =
   "w-full rounded-md border border-border bg-ground px-2.5 py-1.5 text-sm focus-visible:outline-2 focus-visible:outline-text read-only:opacity-80 aria-[invalid=true]:border-critical";
-export const ERROR_CLASS = "text-[13px] leading-snug text-[#fda4af]";
+export const ERROR_CLASS = "text-[13px] leading-snug text-console-danger-text";
 
 /** An alert's status and a case's conclusion share one table: a draft's `conclusion` is either. */
 const CONCLUSION_LABELS = { ...S.status, ...S.caseStatus };
@@ -34,7 +34,7 @@ export function Mark({
   children: ReactNode;
 }) {
   const colours =
-    tone === "warn" ? "bg-[#2a1a0a] text-[#fcd9a8]" : "border border-border text-[#aeb9c6]";
+    tone === "warn" ? "bg-high-bg text-console-warning-text" : "border border-border text-console-secondary";
   return (
     <span
       className={`inline-block rounded px-2 py-0.5 text-xs font-semibold whitespace-nowrap ${colours}`}
@@ -58,7 +58,7 @@ export function ReadError({ message, onRetry }: { message: string; onRetry?: () 
   return (
     <div
       role="alert"
-      className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-[#3a4757] p-6 text-center text-[13.5px] text-[#c9d3df]"
+      className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-console-outline-strong p-6 text-center text-[13.5px] text-console-body"
     >
       <span>{message}</span>
       {onRetry !== undefined && (

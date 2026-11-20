@@ -19,6 +19,13 @@ import { clearingOnFailure } from "./loginFailure";
 
 export { S };
 
+export async function openWorkspaceTab(page: Page, name: string): Promise<void> {
+  await page
+    .getByRole("tablist", { name: S.workspace.sections })
+    .getByRole("tab", { name, exact: true })
+    .click();
+}
+
 /** The API, and the webhook that lives at its root (the UI's own server proxies `/api` only). */
 export const API = "http://127.0.0.1:18000";
 

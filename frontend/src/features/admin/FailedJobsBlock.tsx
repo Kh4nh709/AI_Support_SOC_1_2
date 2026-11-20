@@ -62,7 +62,7 @@ const COLUMNS: Column<FailedJob>[] = [
     id: "error",
     header: J.lastError,
     cell: (job) => (
-      <span className="break-words font-mono text-xs text-[#fda4af]">
+      <span className="break-words font-mono text-xs text-console-danger-text">
         {job.last_error ?? S.common.missing}
       </span>
     ),
@@ -70,7 +70,7 @@ const COLUMNS: Column<FailedJob>[] = [
   {
     id: "at",
     header: J.at,
-    className: "whitespace-nowrap text-[#aeb9c6]",
+    className: "whitespace-nowrap text-console-secondary",
     cell: (job) => formatTime(lastAttemptAt(job)),
   },
 ];
@@ -175,7 +175,7 @@ export function FailedJobsBlock({
         {notice !== null && (
           <div
             role="alert"
-            className="flex items-start gap-3 rounded-lg border border-[#5a3a14] bg-[#2a1a0a] px-3.5 py-3 text-[13.5px] leading-snug text-[#fcd9a8]"
+            className="flex items-start gap-3 rounded-lg border border-console-warning-outline bg-high-bg px-3.5 py-3 text-[13.5px] leading-snug text-console-warning-text"
           >
             <span className="grow">{notice}</span>
             <button type="button" onClick={() => setNotice(null)} className={OUTLINE_BUTTON}>
@@ -187,7 +187,7 @@ export function FailedJobsBlock({
         {failure !== null || jobs === null ? (
           <BlockError failure={failure ?? "unknown"} onRetry={onRetryRead} />
         ) : jobs.length === 0 ? (
-          <p className="flex items-center gap-2.5 text-[13.5px] text-[#9ff0c5]">
+          <p className="flex items-center gap-2.5 text-[13.5px] text-console-success-text">
             <svg
               width="18"
               height="18"
@@ -245,7 +245,7 @@ export function FailedJobsBlock({
               </span>
             </Row>
           </dl>
-          <p className="text-[12.5px] leading-normal text-[#aeb9c6]">{J.dialogNote}</p>
+          <p className="text-[12.5px] leading-normal text-console-secondary">{J.dialogNote}</p>
         </ConfirmDialog>
       )}
     </>

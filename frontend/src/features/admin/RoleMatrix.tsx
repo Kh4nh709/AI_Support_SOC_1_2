@@ -12,9 +12,9 @@ type Row = (typeof M.rows)[number];
 /** "có" in green, or a dash that a screen reader says as "không": a bare "—" would be read as nothing. */
 function Cell({ allowed }: { allowed: boolean }) {
   return allowed ? (
-    <span className="text-[#9ff0c5]">{M.yes}</span>
+    <span className="text-console-success-text">{M.yes}</span>
   ) : (
-    <span className="text-[#5e6b7a]">
+    <span className="text-console-disabled">
       <span aria-hidden="true">{M.no}</span>
       <span className="sr-only">{M.noSpoken}</span>
     </span>

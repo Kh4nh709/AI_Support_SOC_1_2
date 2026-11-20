@@ -1,0 +1,832 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wireframe · AI Support SOC</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --color-ground: #0d1117;
+  --color-surface: #141a22;
+  --color-border: #263241;
+  --color-text: #e6ebf1;
+  --color-muted: #8593a3;
+
+  /* The AI columns: a violet surface apart from the alert column. */
+  --color-ai-surface: #17142a;
+  --color-ai-border: #3a3170;
+  --color-ai-accent: #a78bfa;
+
+  /* The green of a passed check or a verified quote in the AI panels (DEC-221). The risk bands have no green:
+     their "low" is blue. */
+  --color-ok: #4ade80;
+
+  /* Risk bands: the text colour, and the badge background. */
+  --color-critical: #fb7185;
+  --color-critical-bg: #2b0710;
+  --color-high: #fb923c;
+  --color-high-bg: #2a1200;
+  --color-medium: #facc15;
+  --color-medium-bg: #262000;
+  --color-low: #93c5fd;
+  --color-low-bg: #0b1e3a;
+
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+  color-scheme: dark;
+  --accent: var(--color-ai-accent);
+  --detail-bg: var(--color-ai-surface);
+  --detail-line: var(--color-ai-border);
+}
+:root[data-mau="xam"] {
+  --color-ground: #101112;
+  --color-surface: #18191b;
+  --color-border: #303236;
+  --color-text: #ebedef;
+  --color-muted: #a0a3a9;
+  --accent: #dedfe2;
+  --detail-bg: #1b1c20;
+  --detail-line: #34363d;
+  --color-critical: #dedfe2; --color-critical-bg: #34363c;
+  --color-high: #dedfe2; --color-high-bg: #303237;
+  --color-medium: #c7c9cf; --color-medium-bg: #27292e;
+  --color-low: #c7c9cf; --color-low-bg: #24262a;
+  --color-ok: #c7c9cf;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --color-ground: #f4f6fa;
+  --color-surface: #ffffff;
+  --color-border: #c7d0dd;
+  --color-text: #182231;
+  --color-muted: #526277;
+  --color-ai-surface: #f5f1ff;
+  --color-ai-border: #cfc1eb;
+  --color-ai-accent: #663aaf;
+  --color-ok: #16653e;
+  --color-critical: #a22343;
+  --color-critical-bg: #fff0f3;
+  --color-high: #913f0b;
+  --color-high-bg: #fff2e8;
+  --color-medium: #795811;
+  --color-medium-bg: #fff6d9;
+  --color-low: #245e98;
+  --color-low-bg: #eaf3ff;
+}
+:root[data-theme="light"][data-mau="xam"] {
+  --color-ground: #f5f5f5; --color-surface: #ffffff; --color-border: #cdcdcf;
+  --color-text: #202124; --color-muted: #57585d;
+  --accent: #45464c; --detail-bg: #f4f4f5; --detail-line: #c9c9cb;
+  --color-ai-accent: var(--accent); --color-ok: #48494f;
+  --color-critical: #333439; --color-high: #44454b; --color-medium: #515258; --color-low: #5b5c62;
+  --color-critical-bg: #e1e1e3; --color-high-bg: #e8e8e9; --color-medium-bg: #ededee; --color-low-bg: #f0f0f1;
+}
+.theme-picker {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 2px;
+  margin: 0;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background: var(--color-ground);
+  color: var(--color-muted);
+  font: 500 13px/1.25 var(--font-sans);
+}
+.theme-picker label { position: relative; cursor: pointer; }
+.theme-picker input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.theme-picker span { display: grid; place-items: center; min-width: 44px; min-height: 32px; border-radius: 6px; }
+.theme-picker input:checked + span { color: var(--color-ai-accent); background: var(--color-surface); box-shadow: 0 0 0 1px var(--color-border); font-weight: 600; }
+.theme-picker input:focus-visible + span { outline: 2px solid var(--color-ai-accent); outline-offset: -1px; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--color-ground); color: var(--color-text); font: 15px/1.5 var(--font-sans); }
+button, input, select, textarea { font: inherit; }
+a { color: inherit; text-decoration: none; }
+a:hover { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+h1, h2, h3, p, dl, dd { margin: 0; }
+h1 { font-size: clamp(24px, 3vw, 32px); line-height: 1.22; font-weight: 600; overflow-wrap: anywhere; }
+h2 { font-size: 17px; line-height: 1.35; font-weight: 600; }
+h3 { font-size: 14px; font-weight: 600; }
+small, .muted, dt { color: var(--color-muted); }
+small { font-size: 13px; }
+code, time, .mono { font: 12px/1.55 var(--font-mono); overflow-wrap: anywhere; }
+.wf-bar { border-bottom: 1px solid var(--color-border); }
+.wf-tools, .appbar, main, .wf-reason { max-width: 1440px; margin-inline: auto; }
+.wf-tools, .appbar, .row, .actions, .filters, .segmented, .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.wf-tools { padding: 10px 18px; font-size: 13px; column-gap: 8px; }
+.wf-tools > strong { margin-right: 6px; }
+.wf-reason { padding: 9px 24px; background: var(--color-ground); font-size: 13px; }
+.wf-reason summary { cursor: pointer; color: var(--color-muted); }
+.wf-reason p { margin-top: 4px; }
+.appbar { justify-content: space-between; padding: 0 24px; min-height: 58px; }
+.shell-header { background: var(--color-surface); border-block: 1px solid var(--color-border); }
+.brand { font-weight: 600; letter-spacing: -.02em; }
+.nav { align-self: stretch; display: flex; flex-wrap: wrap; align-items: stretch; }
+.nav a { padding: 16px 12px; white-space: nowrap; color: var(--color-muted); border-bottom: 2px solid transparent; }
+.nav a[aria-current] { color: var(--accent); border-color: var(--accent); }
+.live { font-size: 13px; color: var(--color-muted); white-space: nowrap; }
+.dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--color-ok); }
+main { padding: 24px; display: grid; gap: 20px; min-width: 0; }
+.page-head { display: grid; gap: 9px; }
+.page-head > .row { justify-content: space-between; gap: 16px; align-items: start; }
+.crumb { width: fit-content; font-size: 13px; color: var(--color-muted); }
+.row > *, .layout > *, .panel, .record-main { min-width: 0; }
+.panel { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 10px; }
+.panel-head { padding: 14px 16px; display: grid; gap: 4px; border-bottom: 1px solid var(--color-border); }
+.panel-body { padding: 16px; display: grid; gap: 12px; }
+.stack { display: grid; gap: 16px; min-width: 0; }
+.layout { display: grid; gap: 16px; align-items: start; grid-template-columns: minmax(0, 1fr); }
+.layout-preview { grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); }
+.layout-evidence { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
+.btn, .field, .choice summary {
+  min-height: 36px; padding: 6px 11px; border: 1px solid var(--color-border); border-radius: 7px;
+  background: var(--color-surface); color: var(--color-text);
+}
+.btn { display: inline-flex; align-items: center; justify-content: center; text-align: center; cursor: pointer; }
+.btn:disabled { opacity: .55; cursor: default; }
+.btn:hover, .choice summary:hover, .tabs a:hover { background: color-mix(in srgb, var(--color-text) 7%, var(--color-surface)); color: var(--color-text); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--color-ground); font-weight: 600; }
+.btn.primary:hover { background: color-mix(in srgb, var(--accent) 86%, white); color: var(--color-ground); }
+.btn[aria-current], .btn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.wf-tools .btn { min-height: 32px; padding: 4px 8px; }
+.filters { gap: 8px; }
+.field { width: 100%; }
+.search { flex: 1 1 210px; max-width: 320px; }
+.field::placeholder { color: var(--color-muted); }
+.choice { position: relative; }
+.choice summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.choice summary::-webkit-details-marker { display: none; }
+.choice summary::after { content: "⌄"; color: var(--color-muted); }
+.choice-list { position: absolute; z-index: 6; left: 0; top: calc(100% + 5px); display: grid; gap: 2px;
+  min-width: 155px; padding: 5px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 8px; }
+.choice[data-align-end] .choice-list { left: auto; right: 0; }
+.choice-list a { display: block; padding: 5px 8px; border-radius: 5px; }
+.choice-list a:hover, .choice-list a[aria-current] { color: var(--accent); background: var(--color-ground); }
+.record-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.record-table caption { text-align: left; padding: 10px 14px; color: var(--color-muted); font-size: 13px; }
+.record-table th, .record-table td { text-align: left; padding: 12px 14px; border-top: 1px solid var(--color-border); overflow-wrap: anywhere; }
+.record-table th { font-weight: 500; color: var(--color-muted); font-size: 13px; }
+.record-table td { vertical-align: middle; }
+.record-table th:first-child { width: 113px; }
+.record-table th:nth-child(3) { width: 20%; }
+.record-table th:nth-child(4), .record-table th:last-child { width: 15%; }
+.record-table tbody tr:hover, .record:hover { background: color-mix(in srgb, var(--color-text) 4%, var(--color-surface)); }
+.record-main a { color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.record-main small { display: block; margin-top: 3px; }
+.badge { display: inline-block; border-radius: 4px; padding: 2px 8px; font-size: 12px; font-weight: 500; white-space: nowrap; background: var(--color-ground); }
+.badge.critical { background: var(--color-critical-bg); color: var(--color-critical); }
+.badge.high { background: var(--color-high-bg); color: var(--color-high); }
+.badge.medium { background: var(--color-medium-bg); color: var(--color-medium); }
+.badge.low { background: var(--color-low-bg); color: var(--color-low); }
+.records { display: grid; }
+.soar-actions {
+  align-items: stretch;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: min(100%, 17.5rem, calc(100vw - 5.25rem));
+}
+.soar-action-item {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  gap: 4px;
+  min-width: 0;
+}
+.soar-decision {
+  --tone: var(--color-low);
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-block-size: 44px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--tone) 38%, var(--color-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--tone) 7%, var(--color-surface));
+  color: var(--color-text);
+  font: 600 13px/1.3 var(--font-sans);
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.soar-decision[data-decision="keep"] { --tone: var(--color-ok); }
+.soar-decision[data-decision="undo"] { --tone: var(--color-high); }
+.soar-decision::before {
+  content: "";
+  width: 16px;
+  height: 16px;
+  background-color: var(--tone);
+  mask: var(--decision-icon) center / contain no-repeat;
+}
+.soar-decision[data-decision="keep"] {
+  --decision-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='m3 8 3 3 7-7'/%3E%3C/svg%3E");
+}
+.soar-decision[data-decision="undo"] {
+  --decision-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M6 3 2.5 6.5 6 10 M3 6.5h6a4 4 0 0 1 4 4v2'/%3E%3C/svg%3E");
+}
+.soar-decision[data-decision="fp"] {
+  --decision-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M14 8a6 6 0 1 1-12 0 6 6 0 0 1 12 0 M4 12l8-8'/%3E%3C/svg%3E");
+}
+@media (min-width: 761px) {
+  .soar-actions { width: min(100%, 17.5rem, calc(36vw - 3rem)); }
+}
+.soar-decision:hover:enabled { border-color: var(--tone); background: color-mix(in srgb, var(--tone) 14%, var(--color-surface)); }
+.soar-decision:focus-visible { outline: 2px solid var(--tone); outline-offset: 2px; }
+.soar-decision:disabled { opacity: .55; cursor: default; }
+.soar-ticket > .soar-actions { margin: 0 16px 12px; max-width: calc(100% - 32px); }
+.soar-confirm .actions { display:grid;grid-template-columns:repeat(2,minmax(0,1fr)); }
+.soar-confirm .actions button { min-height:44px;font-size:13px;font-weight:600; }
+.soar-confirm { position: fixed; inset: 0; margin: auto; height: fit-content; width: min(28rem, calc(100% - 2rem)); color: var(--color-text); }
+.soar-confirm::backdrop { background: rgb(0 0 0 / 65%); }
+.record { display: grid; gap: 5px; padding: 13px 16px; border-top: 1px solid var(--color-border); }
+.record[aria-current] { background: color-mix(in srgb, var(--accent) 10%, var(--color-surface)); box-shadow: inset 2px 0 var(--accent); }
+.soar-ticket {
+  position: relative;
+  isolation: isolate;
+  display: flow-root;
+  border-top: 1px solid var(--color-border);
+}
+.soar-ticket:hover { background: color-mix(in srgb, var(--color-text) 5%, var(--color-surface)); }
+.soar-ticket:has(> .record[aria-current]) {
+  background: color-mix(in srgb, var(--accent) 16%, var(--color-surface));
+  box-shadow: inset 3px 0 var(--accent);
+}
+.soar-ticket > .record { border-top: 0; background: transparent; box-shadow: none; color: inherit; }
+.soar-ticket > .record::after { content: ""; position: absolute; inset: 0; }
+.soar-ticket > .record > *, .soar-ticket .soar-decision { position: relative; z-index: 1; }
+.soar-ticket:has(> .record:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+.soar-ticket > .record:focus-visible { outline: none; }
+.record > strong { overflow-wrap: anywhere; }
+#block-5, #block-9 { scroll-margin-block-start: 16px; }
+.record .row { row-gap: 4px; }
+.record .row { font-size: 13px; }
+.pages { display: flex; align-items: center; gap: 14px; justify-content: space-between; padding: 10px 14px; border-top: 1px solid var(--color-border); }
+.pages .btn { min-width: 34px; min-height: 32px; }
+.key-values, .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; font-size: 14px; }
+.key-values dt, .tiles dt { font-size: 12px; }
+.key-values dd, .tiles dd { overflow-wrap: anywhere; margin-top: 2px; }
+.tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.tiles > div { padding: 8px; border: 1px solid var(--detail-line); border-radius: 6px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 2px 12px; border-bottom: 1px solid var(--color-border); }
+.tabs a { padding: 7px 5px; border-bottom: 2px solid transparent; color: var(--color-muted); font-size: 13px; }
+.tabs a[aria-current] { border-bottom-color: var(--accent); color: var(--accent); }
+.ai { background: var(--detail-bg); border-color: var(--detail-line); }
+.ai .panel-head, .ai .tabs { border-color: var(--detail-line); }
+.preview-cta { width: fit-content; }
+.log { padding: 10px; border-radius: 6px; background: var(--color-ground); overflow-wrap: anywhere; }
+.admin-frame { grid-template-columns: minmax(165px, 215px) minmax(0, 1fr); }
+.admin-frame .record-table th:last-child { width: 28%; } .admin-frame .record-table .badge { white-space: normal; } .admin-sidebar { display: grid; gap: 2px; padding: 8px; }
+.admin-sidebar a { padding: 8px 10px; border-radius: 6px; color: var(--color-muted); }
+.admin-sidebar a:hover { background: var(--color-ground); }
+.admin-sidebar a[aria-current] { color: var(--accent); background: var(--detail-bg); }
+.catalog-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,254px),1fr)); gap: 12px; }
+.catalog-item { min-width: 0; padding: 12px; border: 1px solid var(--color-border); border-radius: 8px; display: grid; align-content: start; gap: 6px; overflow-wrap: anywhere; }
+.catalog-item .actions { margin-top: 3px; }
+.login-demo { display: grid; gap: 14px; width: min(100%,420px); margin: 20px auto; }
+@media (max-width: 760px) { .admin-frame { grid-template-columns: minmax(0,1fr); } .admin-sidebar { display: flex; flex-wrap: wrap; } }
+.supplemental-toggle { display: list-item; cursor: pointer; margin-left: 1rem; }
+.ti-bars { display: flex; flex-wrap: wrap; gap: 8px; }
+.ti-bars > div { display: grid; gap: 3px; }
+.ti-bars meter { width: 42px; accent-color: var(--accent); }
+.timeline { margin: 0; }
+.timeline { margin: 0; padding-left: 18px; display: grid; gap: 9px; }
+textarea.field { min-height: 70px; resize: vertical; }
+.message { min-height: 210px; display: grid; place-content: center; text-align: center; gap: 8px; padding: 20px; }
+.message .btn { justify-self: center; margin-top: 4px; }
+.skeleton { display: grid; gap: 14px; padding: 17px; }
+.skeleton div { height: 36px; background: var(--color-border); border-radius: 6px; }
+.skeleton div:nth-child(even) { width: 78%; }
+[data-wf-block] { position: relative; }
+body[data-uu="1"] [data-wf-block]::before { content: attr(data-wf-block); position: absolute; inset: -11px auto auto 8px; z-index: 2;
+  background: var(--color-border); color: var(--color-text); padding: 0 5px; line-height: 18px; font-size: 11px; border-radius: 4px; pointer-events: none; }
+body[data-gon="1"] [data-wf-gon], body[data-bolap="1"] [data-wf-lap] { display: none; }
+body[data-frame] .wf-bar, body[data-frame] .wf-reason { display: none; }
+.phone { display: block; width: 375px; max-width: calc(100% - 24px); height: 780px; margin: 18px auto; border: 1px solid var(--color-border); border-radius: 14px; }
+@media (min-width: 761px) { .narrow { display: none !important; } }
+@media (max-width: 760px) {
+  .wide { display: none !important; }
+  main, .wf-tools, .appbar, .wf-reason { padding-inline: 14px; }
+  main { padding-block: 18px; gap: 16px; }
+  .appbar { padding-top: 9px; gap: 2px 12px; }
+  .nav { order: 3; width: 100%; }
+  .nav a { padding: 7px 8px; }
+  .layout-preview, .layout-evidence { grid-template-columns: minmax(0, 1fr); }
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .search { max-width: none; }
+  .records > :is(#block-5, #block-15, #block-16) { margin: 6px 10px 12px; }
+}
+</style>
+</head>
+<body>
+<div id="demo"></div>
+<script>
+const params = new URLSearchParams(location.search);
+const defaults = {ph017:"", ph013:"", q:"", v:"b", man:"catalog", mau:"xam", kho:"desktop", tt:"du-lieu", gon:"0", bolap:"0", uu:"0", muc:"all", handling:"all", n:"0", trang:"1", tab:"evidence", ai:"overview"};
+const state = Object.fromEntries(Object.entries(defaults).map(([name, value]) => [name, params.get(name) || value]));
+const extraScreens = {
+  catalog:["Danh mục thiết kế","","",""],
+  login:["Đăng nhập","/login","Trước đăng nhập","Đặt ô tài khoản, mật khẩu và lỗi đăng nhập sát nhau."],
+  "admin-overview":["Tổng quan hệ thống","/admin/overview","Admin","Đưa sức khoẻ hệ thống, hàng đợi và lỗi cần xử lý lên đầu."],
+  "admin-users":["Người dùng và quyền","/admin/users","Admin","Tìm theo người dùng, phân biệt vai trò và trạng thái. Xác nhận thay đổi quyền trong hộp thoại."],
+  "admin-llm":["LLM và hạn mức","/admin/llm","Admin","Đặt chi phí, hạn mức và lỗi theo cùng khoảng thời gian để dễ đối chiếu."],
+  "admin-labels":["Gán nhãn tập vàng","/admin/labels","Admin","Đọc bằng chứng rồi gán nhãn, với tiến độ và trạng thái lưu luôn dễ thấy."],
+  "admin-lab":["Gán nhãn lab","/admin/lab","Admin","So sánh mức hoàn tất giữa các lần chạy và mở lần chạy cần gán nhãn."],
+  "admin-lab-run":["Lần chạy lab","/admin/lab/:runId","Admin","Đặt tiến độ, danh sách alert và bằng chứng ngay trong cùng ngữ cảnh lần chạy."],
+  "admin-knowledge":["Tri thức học được","/admin/knowledge","Admin","Danh sách bản nháp bên cạnh phần đối chiếu nội dung và nguồn."],
+  "admin-audit":["Nhật ký audit","/admin/audit","Admin","Ưu tiên bộ lọc thời gian, người thực hiện và nhóm sự kiện. Xem chi tiết khi mở bản ghi."],
+  forbidden:["Thiếu quyền truy cập","","","Thông báo hiện ở Hàng đợi sau khi bị từ chối quyền."],
+  missing:["Không tìm thấy bản ghi","","","Trang chi tiết thông báo bản ghi không tồn tại và đưa người dùng về danh sách."]
+};
+if (!["a", "b"].includes(state.v)) state.v = "a";
+if (!["queue", "alert", "cases", "case", "ti", "soar", ...Object.keys(extraScreens)].includes(state.man)) state.man = "queue";
+Object.assign(document.body.dataset, {gon:state.gon, bolap:state.bolap, uu:state.uu});
+document.documentElement.dataset.mau = state.mau;
+if (params.has("frame")) document.body.dataset.frame = "1";
+
+const alerts = [
+  ["critical", "Nghiêm trọng", "Nhiều lần xác thực SSH thất bại trên máy chủ thanh toán", "Rule 5710 · srv-pay-02", "Máy chủ thanh toán", "Mới", "09:42", "A-1042", "Đã phân tích", "48"],
+  ["high", "Cao", "Phát hiện thay đổi tài khoản đặc quyền ngoài khung bảo trì", "Rule 5501 · srv-auth-01", "Máy chủ xác thực", "Đang xử lý", "09:36", "A-1039", "Đã phân tích", "12"],
+  ["medium", "Trung bình", "Đăng nhập ngoài giờ vào hệ thống quản lý chứng từ và đối soát giao dịch", "Rule 18107 · win-fin-17", "Máy trạm tài chính", "Mới", "09:21", "A-1033", "Đang phân tích", "3"],
+  ["low", "Thấp", "Dịch vụ hệ thống khởi động lại", "Rule 5300 · srv-app-03", "Máy chủ dịch vụ", "Mới", "08:58", "A-1025", "Chưa phân tích", "1"]
+];
+const cases = [
+  ["critical", "Nghiêm trọng", "Điều tra chuỗi xác thực SSH bất thường trên máy chủ thanh toán", "3 cụm · 52 lần xuất hiện", "Đang điều tra", "Đang điều tra", "09:48", "C-024", "Đã phân tích", "52"],
+  ["high", "Cao", "Thay đổi đặc quyền trên nhiều máy chủ xác thực", "2 cụm · 13 lần xuất hiện", "Đang điều tra", "Đang điều tra", "09:29", "C-021", "Đã phân tích", "13"],
+  ["medium", "Trung bình", "Đăng nhập ngoài giờ vào hệ thống quản lý chứng từ và đối soát giao dịch", "1 cụm · 3 lần xuất hiện", "Đang điều tra", "Đang điều tra", "—", "C-019", "Chưa phân tích", "3"],
+  ["low", "Thấp", "Kiểm tra thay đổi lịch chạy tác vụ sao lưu", "1 cụm · 1 lần xuất hiện", "Đã kết luận", "Đã kết luận", "08:32", "C-017", "Đã phân tích", "1"]
+];
+const titles = {queue:"Hàng đợi Tier 1", alert:"Chi tiết cảnh báo", cases:"Danh sách case Tier 2", case:"Chi tiết case", ti:"Threat Intel", soar:"Phản hồi SOAR", ...Object.fromEntries(Object.entries(extraScreens).map(([id,[title]])=>[id,title]))};
+const tier2 = state.man === "case" || state.man === "cases";
+const listPage = state.man === "queue" || state.man === "cases";
+const data = tier2 ? cases : alerts;
+const selected = Math.min(data.length - 1, Math.max(0, Math.floor(Number(state.n) || 0)));
+const current = data[selected];
+const url = (changes = {}) => "?" + new URLSearchParams({...state, ...(params.has("frame") ? {frame:"1"} : {}), ...changes}).toString().replaceAll("&", "&amp;");
+const nav = (man, changes = {}) => ({man, q:"", ...(man==="ti"||man==="soar"?{v:"b"}:{}), n:"0", muc:"all", handling:"all", trang:"1", tt:"du-lieu", tab:"evidence", ai:"overview", ...changes});
+const button = (label, changes, attr = "", primary = false) => '<a class="btn'+(primary?" primary":"")+'" href="'+url(changes)+'" '+attr+'>'+label+'</a>';
+const textButton = label => '<button class="btn" type="button" data-demo>'+label+'</button>';
+const badge = row => '<span class="badge '+row[0]+'">'+row[1]+'</span>';
+const when = value => '<time>'+value+'</time>';
+const details = (label, choices, value, changes) => '<details class="choice"><summary>'+label+'</summary><div class="choice-list">'+choices.map(([key, name]) => '<a href="'+url(changes(key))+'" '+(value===key?'aria-current="true"':'')+'>'+name+'</a>').join("")+'</div></details>';
+const panel = (num, title, content, style = "") => '<section class="panel '+style+'" id="block-'+num+'" data-wf-block="'+num+'"><div class="panel-head"><h2>'+title+'</h2></div><div class="panel-body">'+content+'</div></section>';
+const pairs = (entries, className = "key-values") => '<dl class="'+className+'">'+entries.map(([label,value,duplicate])=>'<div'+(duplicate?' data-wf-lap':'')+'><dt>'+label+'</dt><dd>'+value+'</dd></div>').join("")+'</dl>';
+const tabs = (entries, key, label) => '<nav class="tabs" aria-label="'+label+'">'+entries.map(([value, name])=>'<a href="'+url({[key]:value})+'" '+(state[key]===value?'aria-current="page"':'')+'>'+name+'</a>').join("")+'</nav>';
+const listRoute = tier2 ? "cases" : "queue";
+const detailRoute = tier2 ? "case" : "alert";
+const handling = [["all","Mọi trạng thái"],["open","Mới"],["assigned","Đang xử lý"]];
+const stateOptions = [["du-lieu","Có dữ liệu"],["dang-tai","Đang tải"],["rong","Rỗng"],["loi","Lỗi"]];
+const levels = [["all","Mọi mức độ"],["critical","Nghiêm trọng"],["high","Cao"],["medium","Trung bình"],["low","Thấp"]];
+const adminPage = state.man.startsWith("admin-");
+const tiView = state.man==="ti";
+const soarView = state.man==="soar";
+const comparesLayouts = listPage || tiView || soarView || state.man==="alert" || state.man==="case";
+const layoutLink = v => ({v});
+const pageTools = '<div class="wf-bar"><div class="wf-tools"><strong>Wireframe</strong>'+
+(comparesLayouts ? button(tiView?"A · Tổng quan":soarView?"A · Bảng phiếu":"A · Bảng", layoutLink("a"), state.v==="a"?'aria-current="true"':'')+
+button(tiView?"B · Tra cứu IOC":soarView?"B · Chi tiết phiếu":"B · Xem nhanh", layoutLink("b"), state.v==="b"?'aria-current="true"':'') : "")+
+details("Màn hình", Object.entries(titles).filter(([id])=>!id.startsWith("admin-")&&id!=="catalog"), state.man, key=>nav(key))+
+button("Danh mục",nav("catalog"))+
+details("Trạng thái", stateOptions, state.tt, key=>({tt:key}))+
+[["mau","Màu","mau","xam"],["gon","Gọn chữ","1","0"],["bolap","Bỏ lặp","1","0"]].map(([key,label,on,off])=>button(label,{[key]:state[key]===on?off:on},'aria-pressed="'+(state[key]===on)+'"')).join("")+
+button(state.kho==="mobile"?"Desktop":"375 px",{kho:state.kho==="mobile"?"desktop":"mobile"},'aria-pressed="'+(state.kho==="mobile")+'"')+
+'</div></div>';
+const reasons = !comparesLayouts ? [extraScreens[state.man]?.[3]].filter(Boolean) : tiView ?
+  (state.v==="a" ? ["Mở đầu bằng tình trạng import, chỉ số và biểu đồ.","Danh sách IOC nằm dưới phần tổng quan.","Phù hợp khi theo dõi nguồn dữ liệu hằng ngày."] : ["Đưa bộ lọc và kết quả tìm IOC lên đầu.","Chọn một IOC để đọc chi tiết bên cạnh.","Chỉ số và biểu đồ nằm trong khối có thể mở."]) :
+  soarView ? (state.v==="a" ? ["Quét phiếu theo cột thời gian, case và trạng thái.","Bảng hiển thị trên màn rộng, thẻ trên màn hẹp.","Phù hợp để đối chiếu nhiều phiếu."] : ["Đọc từng phiếu với danh sách bên trái và chi tiết bên phải.","Đổi phiếu ngay trong danh sách.","Phù hợp để xem bối cảnh và ghi chú từng phiếu."]) :
+  state.v==="a" ?
+ ["Ưu tiên quét bảng và so sánh cảnh báo theo cột.","Chi tiết đặt dữ liệu gốc và phân tích AI cạnh nhau.","Mỗi lần xem một mục, analyst mở trang chi tiết."] :
+ ["Ưu tiên đọc nhanh từng mục trong hàng đợi hoặc danh sách case.","Bổ sung panel xem nhanh. Chi tiết dùng tab Bằng chứng, Phân tích AI và thao tác của analyst.","Danh sách hiển thị ít cột hơn. Xem nhanh cần trạng thái chọn mục trên frontend."];
+
+const themePicker = '<fieldset class="theme-picker" aria-label="Giao diện">'+
+  [['light','Sáng'],['dark','Tối']].map(([value,label])=>'<label><input type="radio" name="appearance" value="'+value+'"><span>'+label+'</span></label>').join("")+'</fieldset>';
+const appbar = '<header class="shell-header"><div class="appbar" data-wf-block="1"><a class="brand" href="'+url(nav("queue"))+'">AI Support SOC</a><nav class="nav" aria-label="Khu vực làm việc"><a href="'+url(nav("queue"))+'" '+(state.man==="queue"||state.man==="alert"?'aria-current="page"':'')+'>Hàng đợi</a><a href="'+url(nav("cases"))+'" '+(tier2?'aria-current="page"':'')+'>Case</a><a href="'+url(nav("soar"))+'" '+(state.man==="soar"?'aria-current="page"':'')+'>Phản hồi SOAR</a><a href="'+url(nav("ti"))+'" '+(state.man==="ti"?'aria-current="page"':'')+'>Threat Intel</a><a href="'+url(nav("admin-overview"))+'" '+(adminPage?'aria-current="page"':'')+'>Quản trị</a></nav>'+themePicker+'<span class="live"><span class="dot"></span>Mô phỏng · '+(adminPage?"Admin":(state.man==="ti"||state.man==="soar"||state.man==="catalog")?"Dữ liệu mẫu":tier2?"Tier 2":"Tier 1")+'</span></div></header>';
+function statusMessage(kind) {
+  const searchable = listPage || tiView || soarView;
+  if (kind==="dang-tai") return '<section class="panel skeleton" role="status" aria-label="Đang tải dữ liệu"><div></div><div></div><div></div><div></div></section>';
+  const failed = kind==="loi";
+  return '<section class="panel message" role="'+(failed?"alert":"status")+'"><h2>'+(failed?"Không tải được dữ liệu":searchable?"Không có mục phù hợp":"Không tìm thấy dữ liệu")+'</h2><p class="muted">'+(failed?"Kiểm tra kết nối và thử lại.":searchable?"Thử đổi bộ lọc để xem các mục khác.":"Mục này có thể đã được lưu trữ.")+'</p>'+button(failed?"Thử lại":searchable?"Xóa bộ lọc":"Về danh sách",failed||searchable?{tt:"du-lieu",muc:"all",handling:"all",q:failed?state.q:"",n:"0"}:nav(listRoute))+'</section>';
+}
+function cardList(rows, split, active) {
+  const shown = rows.map(({row,index}) => {
+    const destination = split ? url({n:String(index)}) : url(nav(detailRoute,{n:String(index)}));
+    const hoverTarget = split ? ' data-quick-link' : '';
+    const meta = tier2
+      ? 'Phân tích gần nhất '+when(row[6])
+      : 'Gần nhất '+when(row[6]);
+    const comparison = tier2 ? row[9]+' lần xuất hiện' : row[8];
+    return '<a class="record" href="'+destination+'"'+hoverTarget+' '+(split&&index===active?'aria-current="true"':'')+
+      '><div class="row">'+badge(row)+'<span class="muted">'+meta+'</span></div><strong>'+row[2]+'</strong><div class="row muted"><span>'+row[5]+
+      '</span><span>'+comparison+'</span><span data-wf-gon>'+row[3]+'</span></div></a>';
+  }).join("");
+  return '<div class="records '+(split?"":"narrow")+'">'+shown+'</div>';
+}
+function tableList(rows) {
+  const heads = ["Mức độ", tier2?"Tiêu đề":"Cảnh báo", tier2?"Trạng thái":"Tài sản", tier2?"Phân tích gần nhất":"Xuất hiện gần nhất", tier2?"Số lần xuất hiện":"Phân tích AI"];
+  return '<table class="record-table wide"><thead><tr>'+heads.map(h=>'<th scope="col">'+h+'</th>').join("")+'</tr></thead><tbody>'+
+  rows.map(({row,index})=>'<tr><td>'+badge(row)+'</td><td class="record-main"><a href="'+url(nav(detailRoute,{n:String(index)}))+'">'+row[2]+'</a><small data-wf-gon>'+row[3]+'</small></td><td>'+row[4]+'</td><td>'+when(row[6])+'</td><td>'+(tier2?row[9]:row[8])+'</td></tr>').join("")+'</tbody></table>';
+}
+function renderList() {
+  const rows = data.map((row,index)=>({row,index})).filter(({row})=>{
+    const bandMatches = state.muc==="all" || row[0]===state.muc;
+    const statusMatches = tier2 || state.handling==="all" || (state.handling==="open" ? row[5]==="Mới" : row[5]==="Đang xử lý");
+    return bandMatches && statusMatches;
+  });
+  const pageRows = state.muc==="all" && state.handling==="all" ? rows.slice(state.trang==="2"?3:0,state.trang==="2"?6:3) : rows;
+  const split = state.v==="b";
+  const active = pageRows.find(item=>item.index===selected) || pageRows[0];
+  let content;
+  if (state.tt==="du-lieu" && pageRows.length) {
+    const list = '<section class="panel" data-wf-block="4"><div class="panel-head"><small>'+rows.length+' '+(tier2?"case":"cảnh báo")+'</small></div>'+
+      (split?"":tableList(pageRows))+cardList(pageRows,split,active.index)+
+      (rows.length <= 3 ? "" : '<nav class="pages" aria-label="Phân trang"><div class="segmented">'+
+      button("‹",{trang:"1"},'aria-label="Trang trước"')+button("1",{trang:"1"},state.trang==="1"?'aria-current="page"':'')+
+      button("2",{trang:"2"},state.trang==="2"?'aria-current="page"':'')+button("›",{trang:"2"},'aria-label="Trang sau"')+'</div><small data-wf-lap>Trang '+(state.trang==="2"?"2":"1")+'</small></nav>')+'</section>';
+    if (split) {
+      const {row,index}=active;
+      const preview = panel(5,"Xem nhanh",'<div class="row">'+badge(row)+'<small class="mono">'+row[7]+'</small></div><h2 data-wf-lap>'+row[2]+'</h2>'+
+        pairs([[tier2?"Trạng thái":"Xử lý",row[5]],[tier2?"Lần phân tích gần nhất":"Kết quả AI",tier2?when(row[6]):row[8]],[tier2?"Cảnh báo liên quan":"Số lần xuất hiện",tier2?row[3]:row[9]]])+
+        '<div class="preview-cta">'+button(tier2?"Mở case":"Mở cảnh báo",nav(detailRoute,{n:String(index)}),"",true)+'</div>');
+      content = '<div class="layout layout-preview">'+list+preview+'</div>';
+    } else content = list;
+  } else content = statusMessage(state.tt==="du-lieu"?"rong":state.tt);
+  return '<header class="page-head" data-wf-block="2"><h1>'+titles[state.man]+'</h1></header><div class="filters" data-wf-block="3">'+
+    details(levels.find(([value])=>value===state.muc)?.[1]||"Mọi mức độ",levels,state.muc,key=>({muc:key,n:"0",trang:"1"}))+
+    (!tier2?details(handling.find(([value])=>value===state.handling)?.[1]||"Mọi trạng thái",handling,state.handling,key=>({handling:key,n:"0",trang:"1"})):"")+
+    '</div>'+content;
+}
+function evidence() {
+  if (tier2) return panel(6,"Cảnh báo liên quan",'<a href="'+url(nav("alert",{n:String(selected)}))+'">'+alerts[selected][2]+' ↗</a><small>'+alerts[selected][3]+'</small>')+
+    panel(7,"Dòng thời gian",'<ol class="timeline"><li>'+when(selected===3?"08:18":alerts[selected][6])+' · Nhận cảnh báo từ Wazuh</li>'+
+      (current[8]==="Đã phân tích"?'<li>'+when(current[6])+' · Hoàn tất lượt phân tích AI</li>':'<li>Chưa có lượt phân tích AI</li>')+'</ol>');
+  return panel(6,"Dữ liệu cảnh báo",pairs([["Nguồn","Wazuh"],["Tài sản",current[4]],["Lần xuất hiện gần nhất",when(current[6])],["Số lần xuất hiện",current[9]],["Mã cảnh báo",'<code>'+current[7]+'</code>',true]]))+
+    panel(7,"Nhật ký gốc",'<div class="log"><code>event.outcome=failure · source=Wazuh · id='+current[7]+'</code></div><small data-wf-gon>Thông tin đầy đủ xem trong bản ghi nguồn.</small>');
+}
+function analysis() {
+  if (current[8] !== "Đã phân tích") {
+    return panel(8,"Phân tích AI · "+(tier2?"Tier 2":"Tier 1"),'<p>'+current[8]+'</p>',"ai");
+  }
+  const options = tier2
+    ? [["overview","Tổng quan"],["events","Diễn biến"],["hypotheses","Giả thuyết"],["evidence","Bằng chứng"],["tech","Kỹ thuật"]]
+    : [["overview","Tổng quan"],["evidence","Bằng chứng"],["knowledge","Tri thức"],["verify","Kiểm chứng"],["tech","Kỹ thuật"]];
+  const text = {
+    overview:"Bản ghi cho thấy hoạt động ngoài khung bảo trì. Cần đối chiếu với lịch thay đổi đã duyệt.",
+    events:current[6]+" · Hoàn tất lượt phân tích mô phỏng.",
+    hypotheses:"Thay đổi theo lịch bảo trì. Đối chiếu phiếu thay đổi và tài khoản thực hiện.",
+    evidence:"Wazuh ghi nhận hoạt động bất thường. Đối chiếu mã cảnh báo với nhật ký gốc.",
+    knowledge:"Chưa có mục tri thức đủ liên quan trong dữ liệu mẫu.",
+    verify:"Đã đối chiếu hai điều kiện. Còn một điều kiện cần kiểm tra.",
+    tech:"Thời gian phân tích mẫu 12 giây."
+  };
+  const active = options.some(([key])=>key===state.ai)?state.ai:"overview";
+  return panel(8,"Phân tích AI · "+(tier2?"Tier 2":"Tier 1"),
+     (!tier2?'<small>Đề xuất AI dùng để tham khảo.</small>':'')+
+     pairs([["Kết luận","Sự cố thật"],["Độ tin cậy","Trung bình"],["Tri thức (RAG)","Dưới ngưỡng"],tier2?["Dẫn chứng","2/3 xác thực"]:["Kiểm chứng","2/3 đạt"]],"tiles")+
+     tabs(options,"ai","Mục phân tích AI")+'<p>'+text[active]+'</p>',"ai");
+}
+function decide() {
+  const content = tier2 ? '<label for="note">Ghi chú điều tra</label><textarea id="note" class="field" placeholder="Nhập ghi chú"></textarea><div class="actions">'+textButton("Thêm ghi chú")+textButton("Ghi kết luận")+'</div>' :
+  '<p class="muted">Nhận cảnh báo để ghi quyết định xử lý.</p><div class="actions">'+textButton("Nhận xử lý")+textButton("Chuyển Tier 2")+textButton("Đóng cảnh báo")+'</div>';
+  return panel(9,tier2?"Ghi chú và kết luận":"Quyết định của analyst",content+'<p id="demo-feedback" class="muted" role="status" hidden></p>');
+}
+function renderDetail() {
+  const head = '<header class="page-head" data-wf-block="2"><a class="crumb" href="'+url(nav(listRoute))+'">‹ '+titles[listRoute]+'</a><div class="row"><h1>'+current[2]+'</h1>'+
+    (state.tt==="du-lieu"?(state.v==="a"?'<a class="btn" href="#block-9">'+(tier2?"Ghi chú và kết luận":"Xử lý cảnh báo")+'</a>':button(tier2?"Ghi chú và kết luận":"Xử lý cảnh báo",{tab:"decision"})):"")+
+    '</div><div class="meta">'+badge(current)+'<span class="mono muted">'+current[7]+'</span><span>'+current[5]+'</span>'+(!tier2?'<span class="muted">'+(selected===1?"Nguyễn Thị Phương Thảo đang xử lý":"Chưa có người xử lý")+'</span>':'')+'</div></header>';
+  if (state.tt!=="du-lieu") return head+statusMessage(state.tt);
+  if (state.v==="a") return head+'<div class="layout layout-evidence"><div class="stack">'+evidence()+decide()+'</div>'+analysis()+'</div>';
+  const detailTabs=[["evidence","Bằng chứng"],["analysis","Phân tích AI"],["decision",tier2?"Ghi chú và kết luận":"Quyết định xử lý"]];
+  const content={evidence:evidence,analysis:analysis,decision:decide};
+  return head+tabs(detailTabs,"tab","Nội dung chi tiết")+'<div class="stack">'+(content[state.tab]||evidence)()+'</div>';
+}
+const reason = reasons.length ? '<details class="wf-reason" '+(state.uu==="1"?'open':'')+'><summary>Vì sao chọn bố cục này</summary>'+reasons.map(line=>'<p>'+line+'</p>').join("")+'</details>' : '';
+function lookupForm(label, hint, maxLength) {
+  return '<form data-lookup role="search" class="filters"><label for="lookup">'+label+'</label>'+
+    '<input type="search" id="lookup" class="field search" placeholder="'+hint+'" maxlength="'+maxLength+'">'+
+    '<button class="btn primary" type="submit">Tìm</button><button class="btn" data-clear type="button">Xóa tìm kiếm</button></form>';
+}
+function matchesSearch(fields) {
+  const normalize = value => value.toLocaleLowerCase("vi").normalize("NFD").replace(/\p{M}/gu,"").replaceAll("đ","d");
+  return fields.some(field => normalize(field).includes(normalize(state.q.trim())));
+}
+function renderThreatIntel() {
+  const head = '<header class="page-head" data-wf-block="2"><h1>Threat Intel</h1></header>';
+  if (state.tt !== "du-lieu") return head+statusMessage(state.tt);
+  const stats = panel(10,"Trạng thái import",'<div class="row"><span>Lần import gần nhất</span>'+when("07:00")+
+    '<small>GMT+7 · 32 IOC mới · 8 cập nhật · 0 dòng lỗi</small></div>');
+  const counts = panel(11,"Chỉ số",pairs([["Mới hôm nay","32"],["Độ tin cậy ≥ 80","21"],["Top 3 malware","RedLine, Agent Tesla, AsyncRAT"],["Khớp trong log","0"]],"tiles"));
+  const charts = '<div class="layout layout-evidence">'+panel(12,"IOC mỗi ngày, 7 ngày gần nhất",
+    '<div class="ti-bars" role="img" aria-label="IOC theo ngày, dữ liệu mẫu">'+[18,24,16,32,21,28,32].map((n,i)=>
+    '<div><meter min="0" max="40" value="'+n+'" aria-label="Ngày '+(14+i)+'/11"></meter><small>'+(14+i)+'</small></div>').join("")+'</div>')+
+    panel(13,"Top malware",'<div class="stack"><div>RedLine <span class="muted">· 12 IOC</span></div><div>Agent Tesla <span class="muted">· 9 IOC</span></div><div>AsyncRAT <span class="muted">· 6 IOC</span></div></div>')+'</div>';
+  const sources = [["all","Tất cả nguồn"],["threatfox","ThreatFox"],["urlhaus","URLhaus"],["malwarebazaar","MalwareBazaar"]];
+  const sample = [
+    ["threatfox","ThreatFox","domain","host[.]example","RedLine","90","20/11 07:00"],
+    ["urlhaus","URLhaus","url","hxxps://download[.]example/update","Agent Tesla","85","20/11 06:40"],
+    ["malwarebazaar","MalwareBazaar","sha256_hash","a1b2c3d4…e5f60708","AsyncRAT","80","20/11 06:12"]
+  ];
+  const shown = sample.map((row,index)=>({row,index})).filter(({row})=>(state.muc==="all"||state.muc===row[0]) && matchesSearch(row));
+  const picked = shown.find(({index})=>index===selected) || shown[0];
+  const filters = details(sources.find(([id])=>id===state.muc)?.[1]||"Tất cả nguồn",sources,state.muc,key=>({muc:key}));
+  const intro = '<div class="panel-head"><h2>Danh sách IOC</h2><small>Giá trị đã vô hiệu hoá · '+shown.length+' IOC mẫu</small><div class="filters">'+filters+'</div>'+lookupForm("Tìm IOC","Giá trị hoặc malware",128)+'</div>';
+  const list = shown.map(({row,index})=>{
+    const body = '<div class="row"><small>'+row[1]+'</small><small>'+row[2]+'</small></div><code>'+row[3]+'</code>'+
+      '<div class="row muted"><span>'+row[4]+'</span><span>Tin cậy '+row[5]+'</span></div>';
+    return state.v==="a" ? '<article class="record">'+body+'</article>' :
+      '<a class="record" data-quick-link href="'+url({n:String(index)})+'" '+(picked.index===index?'aria-current="true"':'')+'>'+body+'</a>';
+  }).join("");
+  const iocs = '<section class="panel" data-wf-block="14">'+intro+'<div class="records">'+(list||'<p role="status" class="panel-body">Không có IOC khớp với bộ lọc.</p>')+'</div></section>';
+  if (state.v==="a") return head+stats+counts+charts+iocs;
+  const row = picked?.row;
+  const detail = row ? panel(15,"Chi tiết IOC",'<div class="log"><code>'+row[3]+'</code></div>'+
+    pairs([["Nguồn",row[1]],["Loại",row[2]],["Malware",row[4]],["Độ tin cậy",row[5]],["Thấy lúc",when(row[6])]])) : "";
+  return head+'<div class="layout layout-preview">'+iocs+detail+'</div>'+
+    '<details class="panel"><summary class="panel-body supplemental-toggle">Trạng thái import và biểu đồ</summary><div class="panel-body">'+stats+counts+charts+'</div></details>';
+}
+const demoTickets = [
+  {id:"PH-017", key:"ph017", title:"IP đã bị chặn trên tường lửa", context:"Case C-024", time:"09:42", note:"Địa chỉ mẫu 192.0.2.17 đã bị chặn. Analyst có thể giữ hoặc gỡ lệnh chặn.", labels:{keep:"✅ Giữ chặn", undo:"↩️ Gỡ chặn IP"}},
+  {id:"PH-013", key:"ph013", title:"Tiến trình đã bị dừng trên máy trạm", context:"Case C-021", time:"09:35", note:"SOAR đã dừng tiến trình. Analyst có thể giữ kết quả hoặc đánh dấu dương tính giả.", labels:{keep:"✅ Giữ (đã kill)", fp:"🚫 Báo nhầm"}}
+];
+const decisionStatus = {keep:"Đã giữ", undo:"Đã gỡ", fp:"Dương tính giả"};
+function demoDecision(ticket) {
+  const value = state[ticket.key];
+  return Object.hasOwn(ticket.labels,value) ? value : "";
+}
+function permitted(ticket) {
+  const current = demoDecision(ticket);
+  if (current === "keep" && ticket.labels.undo) return ["undo"];
+  return current ? [] : Object.keys(ticket.labels);
+}
+function decisionButtons(id) {
+  const ticket = demoTickets.find(item => item.id === id);
+  if (!ticket) return "";
+  const actions = permitted(ticket);
+  if (!actions.length) return "";
+  return '<div class="actions soar-actions" role="group" aria-label="Phản hồi phiếu '+id+'">'+actions.map(action =>
+    '<button type="button" class="soar-decision" aria-label="'+ticket.labels[action]+'" data-ticket="'+id+'" data-decision="'+action+'">'+
+    '<span>'+ticket.labels[action].replace(/^(?:✅|↩️|🚫)\s+/u,"")+'</span></button>').join("")+'</div>';
+}
+function renderSoar() {
+  const head = '<header class="page-head" data-wf-block="2"><h1>Phản hồi SOAR</h1></header>';
+  if(state.tt!=="du-lieu") return head+statusMessage(state.tt);
+  const filters = [["evidence","Đang mở"],["done","Đã xử lý"],["expired","Hết hạn"],["notice","Thông báo"]];
+  const entries = {
+    evidence:[],
+    done:[["PH-008","Case C-017","Đã ghi nhận kết quả rà soát","08:32","Đã xử lý","Analyst đã lưu ghi chú vào case."]],
+    expired:[],
+    notice:[["TB-004","SOAR","Đã nhận bản ghi mô phỏng","08:15","Thông tin","Thông báo được ghi từ nguồn mô phỏng."]]
+  };
+  for (const ticket of demoTickets) {
+    const decision = demoDecision(ticket);
+    entries[decision ? "done" : "evidence"].push([ticket.id,ticket.context,ticket.title,ticket.time,decision ? decisionStatus[decision] : "Đang mở",ticket.note]);
+  }
+  const rows = (Object.hasOwn(entries,state.tab)?entries[state.tab]:entries.evidence).filter(matchesSearch);
+  const picked = Math.min(selected, rows.length - 1);
+  const controls = (demoTickets.some(demoDecision) ? button("Làm lại mẫu SOAR",{ph017:"",ph013:"",tab:"evidence",n:"0",q:""}) : "") + tabs(filters,"tab","Lọc phiếu")+lookupForm("Tìm phiếu","Mã phiếu, case hoặc nội dung",100);
+  if(!rows.length) return head+controls+panel(15,"Các phiếu phản hồi SOAR",'<p class="muted" role="status">'+(state.q?'Không có phiếu khớp với tìm kiếm.':'Không có phiếu ở trạng thái này.')+'</p>');
+  if(state.v==="a"){
+    const content = '<table class="record-table wide"><thead><tr>'+["Phiếu","Nội dung","Case","Thời gian","Trạng thái","Phản hồi"].map(label=>'<th scope="col">'+label+'</th>').join("")+'</tr></thead><tbody>'+
+      rows.map(([id,context,title,time,status])=>'<tr><td><code>'+id+'</code></td><td>'+title+'</td><td>'+context+'</td><td>'+when(time)+'</td><td>'+status+'</td><td>'+decisionButtons(id)+'</td></tr>').join("")+'</tbody></table>'+
+      '<div class="records narrow">'+rows.map(([id,context,title,time,status])=>'<article class="record"><div class="row"><small>'+id+'</small>'+when(time)+'</div><strong>'+title+'</strong><small>'+context+' · '+status+'</small>'+decisionButtons(id)+'</article>').join("")+'</div>';
+    return head+controls+'<section class="panel" data-wf-block="15"><div class="panel-head"><h2>Các phiếu phản hồi SOAR</h2><small>'+rows.length+' phiếu mẫu</small></div>'+content+'</section>';
+  }
+  const list = rows.map(([id,context,title,time,status],index)=>'<article class="soar-ticket"><a class="record" data-quick-link href="'+url({n:String(index)})+'" '+(index===picked?'aria-current="true"':'')+'><div class="row"><small>'+id+'</small>'+when(time)+'</div><strong>'+title+'</strong><small>'+context+' · '+status+'</small></a>'+decisionButtons(id)+'</article>').join("");
+  const [id,context,title,time,status,note] = rows[picked];
+  const detail = panel(16,"Chi tiết phiếu",'<h3>'+title+'</h3>'+decisionButtons(id)+pairs([["Phiếu",id],["Trạng thái",status],["Case",context],["Thời gian",when(time)]])+'<div><h3>Ghi chú</h3><p class="muted">'+note+'</p></div>');
+  return head+controls+'<div class="layout layout-preview"><section class="panel" data-wf-block="15"><div class="panel-head"><h2>Các phiếu phản hồi SOAR</h2><small>'+rows.length+' phiếu mẫu</small></div><div class="records">'+list+'</div></section>'+detail+'</div>';
+}
+
+const groupPages = [
+  {title:"Đăng nhập", ids:["login"]},
+  {title:"Vận hành SOC", ids:["queue","alert","cases","case","soar","ti"]},
+  {title:"Quản trị", ids:["admin-overview","admin-users","admin-llm","admin-labels","admin-lab","admin-lab-run","admin-knowledge","admin-audit"]},
+  {title:"Trạng thái chung",ids:["forbidden","missing"]}
+];
+const commonScreens = {
+  queue:["Hàng đợi Tier 1","/queue","Tier 1, Tier 2, Admin","Danh sách có khung xem nhanh theo mức độ, thời điểm và trạng thái AI."],
+  alert:["Chi tiết cảnh báo","/alerts/:alertId","Tier 1, Tier 2, Admin","Tab Bằng chứng, Phân tích AI và Quyết định xử lý. Thao tác xử lý dành cho Tier 1."],
+  cases:["Danh sách case Tier 2","/cases","Tier 2, Admin","Danh sách theo trạng thái điều tra với khung xem nhanh."],
+  case:["Chi tiết case","/cases/:caseId","Tier 2, Admin","Tab Bằng chứng, Phân tích AI, Ghi chú và kết luận."],
+  soar:["Phản hồi SOAR","/soar","Tier 1, Tier 2, Admin","So sánh bảng phiếu với danh sách kèm chi tiết từng phiếu."],
+  ti:["Threat Intel","/threat-intel","Tier 1, Tier 2, Admin","So sánh tổng quan import và biểu đồ với bố cục ưu tiên tra cứu IOC."]
+};
+function catalog() {
+  const all = {...extraScreens,...commonScreens};
+  const groups = groupPages.map(({title,ids},index)=>panel(40+index,title,
+    '<div class="catalog-grid">'+ids.map(id=>{
+      const [label,path,role,proposal]=all[id];
+      const linkA = id==="ti"||id==="soar" ? button("Xem A",nav(id,{v:"a"})) : "";
+      const linkB = button(linkA?"Mở B đã chọn":"Mở mẫu",nav(id,{v:"b"}));
+      return '<article class="catalog-item"><h3>'+label+'</h3>'+
+        (path?'<small class="mono">'+path+'</small><small>'+role+'</small>':'')+
+        '<p>'+proposal+'</p><div class="actions">'+linkA+linkB+'</div></article>';
+    }).join("")+'</div>')).join("");
+  return '<header class="page-head"><h1>Danh mục thiết kế AI Support SOC</h1><p class="muted">15 màn có giao diện riêng, đối chiếu với frontend hiện tại.</p></header>'+groups+
+    panel(44,"Điều hướng tự động",'<ul class="timeline"><li><code>/</code> mở hàng đợi, case hoặc tổng quan Admin theo vai trò.</li><li><code>/admin</code> mở Tổng quan hệ thống.</li><li>Đường dẫn chưa khai báo về <code>/</code>. Trang cần quyền sẽ đưa người chưa đăng nhập tới Đăng nhập hoặc đưa người thiếu quyền về Hàng đợi.</li></ul>');
+}
+function sampleTable(headers, rows) {
+  const desktop = '<table class="record-table wide"><thead><tr>'+headers.map(label=>'<th scope="col">'+label+'</th>').join("")+'</tr></thead><tbody>'+
+    rows.map(row=>'<tr>'+row.map(cell=>'<td>'+cell+'</td>').join("")+'</tr>').join("")+'</tbody></table>';
+  const mobile = '<div class="records narrow">'+rows.map(row=>'<article class="record"><h3>'+row[0]+'</h3>'+
+    pairs(row.slice(1).map((cell,index)=>[headers[index+1],cell]))+'</article>').join("")+'</div>';
+  return desktop+mobile;
+}
+const adminItems = [
+  ["admin-overview","Tổng quan"],["admin-users","Người dùng & quyền"],["admin-llm","LLM & hạn mức"],["admin-labels","Gán nhãn"],
+  ["admin-lab","Gán nhãn lab"],["admin-knowledge","Tri thức"],["admin-audit","Nhật ký audit"]
+];
+const neutral = value => '<span class="badge">'+value+'</span>';
+const warning = value => '<span class="badge high">'+value+'</span>';
+const positive = value => '<span class="badge low">'+value+'</span>';
+function renderAdmin() {
+  const here = state.man;
+  const selectedNav = here==="admin-lab-run"?"admin-lab":here;
+  const sidebar='<nav class="panel admin-sidebar" aria-label="Quản trị">'+adminItems.map(([id,label])=>
+    '<a href="'+url(nav(id))+'" '+(id===selectedNav?'aria-current="page"':'')+'>'+label+'</a>').join("")+'</nav>';
+  const head = '<header class="page-head"><h1>'+extraScreens[here][0]+'</h1></header>';
+  let content;
+  switch (here) {
+    case "admin-overview":
+      content = panel(21,"Tình trạng hệ thống",pairs([["Alert hôm nay","128"],["Chờ Tier 1","14"],["Case đang điều tra","6"],["Job lỗi",warning("2")]],"tiles"))+
+        '<div class="layout layout-evidence">'+panel(22,"Sức khoẻ nguồn dữ liệu",pairs([["Wazuh",positive("Đã nhận lúc 09:42")],["Threat Intel",positive("Import 07:00")],["Lượt chạy AI",warning("2 cần xem")]]))+
+        panel(23,"Việc cần kiểm tra",'<div class="stack">'+button("Mở LLM & hạn mức",nav("admin-llm"))+button("Mở Nhật ký audit",nav("admin-audit"))+'</div>')+'</div>';
+      break;
+    case "admin-users":
+      content = panel(21,"Tài khoản",'<div class="filters"><input class="field search" type="search" aria-label="Tìm tài khoản" placeholder="Tìm tài khoản" data-sample-search>'+textButton("Tạo người dùng")+'</div>'+
+        sampleTable(["Tài khoản","Vai trò","Trạng thái"],[["analyst.lan","Tier 1",positive("Đang hoạt động")],["analyst.minh","Tier 2",positive("Đang hoạt động")],["admin.thao","Admin",neutral("Khoá tạm thời")]])+'<p id="demo-feedback" class="muted" role="status" hidden></p>');
+      break;
+    case "admin-llm":
+      content = '<div class="filters">'+button("7 ngày",{tab:"week"},state.tab!=="month"?'aria-current="true"':'')+button("30 ngày",{tab:"month"},state.tab==="month"?'aria-current="true"':'')+'</div>'+
+        panel(21,"Sử dụng trong kỳ",pairs([["Lượt phân tích",state.tab==="month"?"962":"230"],["Lượt có kết quả",state.tab==="month"?"940":"221"],["Lỗi",state.tab==="month"?"22":"9"],["Hạn mức đã dùng","54%"]],"tiles"))+
+        panel(22,"Theo tác vụ",sampleTable(["Tác vụ","Có kết quả","Lỗi"],[["Phân tích Tier 1","183","7"],["Điều tra Tier 2","38","2"]]));
+      break;
+    case "admin-labels":
+      content = '<div class="layout layout-preview">'+panel(21,"Mẫu cần gán nhãn",'<p class="muted">18 / 24 mẫu đã gán</p><div class="record">AL-1042 · Xác thực SSH thất bại</div><div class="record">AL-1039 · Thay đổi tài khoản đặc quyền</div>')+
+        panel(22,"Bằng chứng và nhãn",'<h3>AL-1042</h3><p>Máy chủ thanh toán ghi nhận nhiều lần xác thực thất bại.</p><fieldset><legend>Chọn nhãn</legend><label><input type="radio" name="sample-label"> Sự cố thật</label><br><label><input type="radio" name="sample-label"> Dương tính giả</label></fieldset>'+textButton("Lưu nhãn")+'<p id="demo-feedback" class="muted" role="status" hidden></p>')+'</div>';
+      break;
+    case "admin-lab":
+      content = panel(21,"Các lần chạy",sampleTable(["Lần chạy","Đã gán","Trạng thái"],[
+        [button("Lab tháng 11",nav("admin-lab-run")),"12 / 20",warning("Đang gán")],["Lab tháng 10","18 / 18",positive("Hoàn tất")]
+      ]));
+      break;
+    case "admin-lab-run":
+      content = '<div>'+button("Về danh sách lần chạy",nav("admin-lab"))+'</div>'+
+        panel(21,"Lab tháng 11",pairs([["Tiến độ","12 / 20 mẫu"],["Trạng thái",warning("Đang gán")]]))+
+        panel(22,"Cảnh báo trong lần chạy",sampleTable(["Cảnh báo","Kịch bản","Nhãn"],[["AL-1042","Xác thực SSH","Chưa gán"],["AL-1039","Thay đổi tài khoản","Sự cố thật"]]));
+      break;
+    case "admin-knowledge":
+      content = '<div class="layout layout-preview">'+panel(21,"Bản nháp chờ duyệt",'<a class="record" href="'+url({n:"0"})+'">K-024 · Đối chiếu lịch bảo trì</a><a class="record" href="'+url({n:"1"})+'">K-021 · Nhật ký xác thực</a>')+
+        panel(22,"Nội dung và nguồn",'<h3>'+(selected===1?"Nhật ký xác thực":"Đối chiếu lịch bảo trì")+'</h3>'+pairs([["Trạng thái",warning("Chờ duyệt")],["Nguồn",selected===1?"Case C-021":"Case C-024"]])+'<p>Đọc nội dung bản nháp và đối chiếu bằng chứng từ case nguồn.</p>')+'</div>';
+      break;
+    default:
+      content = panel(21,"Bản ghi",'<div class="filters"><input class="field search" type="search" aria-label="Tìm sự kiện audit" placeholder="Tìm người thực hiện hoặc nhóm sự kiện" data-sample-search></div>'+
+        sampleTable(["Thời gian","Người thực hiện","Sự kiện"],[["09:42","admin.thao","Cập nhật vai trò"],["09:27","hệ thống","Ghi nhận import"],["08:55","analyst.minh","Thêm ghi chú case"]]));
+  }
+  return '<div class="layout admin-frame">'+sidebar+'<div class="stack">'+head+(state.tt==="du-lieu"?content:statusMessage(state.tt))+'</div></div>';
+}
+function renderLogin() {
+  return '<div class="login-demo"><header class="page-head"><h1>Đăng nhập</h1></header>'+
+    '<section class="panel panel-body"><label for="sample-user">Tên đăng nhập</label><input id="sample-user" class="field" autocomplete="off">'+
+    '<label for="sample-password">Mật khẩu</label><input id="sample-password" class="field" type="password" autocomplete="off">'+
+    (state.tt==="loi"?'<p role="alert">Tên đăng nhập hoặc mật khẩu chưa đúng.</p>':'')+
+    '<div class="actions">'+textButton("Đăng nhập")+'</div><p id="demo-feedback" class="muted" role="status" hidden></p></section></div>';
+}
+function renderException() {
+  const missing = state.man==="missing";
+  return '<header class="page-head"><h1>'+extraScreens[state.man][0]+'</h1></header>'+
+    panel(21,missing?"Kiểm tra bản ghi":"Thông báo ở Hàng đợi",'<p>'+(missing?"Cảnh báo hoặc case đã mở không còn khả dụng.":"Tài khoản hiện tại thiếu quyền truy cập trang vừa mở.")+'</p>'+
+    '<div class="actions">'+button("Về Hàng đợi",nav("queue"))+'</div>');
+}
+const app = (state.man==="login"?'<header class="shell-header"><div class="appbar"><span class="brand">AI Support SOC</span>'+themePicker+'</div></header>':appbar)+'<main id="wf-design">'+(state.man==="catalog"?catalog():state.man==="login"?renderLogin():adminPage?renderAdmin():state.man==="forbidden"||state.man==="missing"?renderException():state.man==="soar"?renderSoar():state.man==="ti"?renderThreatIntel():listPage?renderList():renderDetail())+'</main>';
+document.querySelector("#demo").innerHTML = pageTools+reason+
+  (state.kho==="mobile"&&!params.has("frame")?'<iframe class="phone" title="Bố cục ở 375 px" src="'+url({kho:"desktop",frame:"1"})+'"></iframe>':app);
+document.addEventListener("click",event=>{
+  const trigger = event.target.closest("button[data-decision]");
+  if (!trigger) return;
+  const ticket = demoTickets.find(item => item.id===trigger.dataset.ticket);
+  const action = trigger.dataset.decision;
+  if (!ticket || !permitted(ticket).includes(action)) return;
+  function applyDecision() {
+    const target = new URL(location.href);
+    target.searchParams.set(ticket.key,action);
+    target.searchParams.set("tab","done");
+    target.searchParams.delete("q");
+    const earlier = demoTickets.slice(0,demoTickets.indexOf(ticket)).filter(demoDecision);
+    target.searchParams.set("n",String(1+earlier.length));
+    target.hash = state.v==="b" ? "block-16" : "";
+    location.assign(target.href);
+  }
+  if (action==="keep") { applyDecision(); return; }
+  const dialog = document.createElement("dialog");
+  dialog.className = "panel soar-confirm";
+  dialog.setAttribute("aria-labelledby","confirm-soar-heading");
+  const undo = action==="undo";
+  dialog.innerHTML = '<form method="dialog" class="panel-body"><h2 id="confirm-soar-heading">'+
+    (undo?'Gỡ biện pháp đã áp dụng?':'Đánh dấu dương tính giả?')+'</h2><p>Phiếu '+ticket.id+' · '+ticket.title+'</p><p>'+
+    (undo?'Phiếu mẫu sẽ chuyển sang Đã gỡ.':'Phiếu mẫu sẽ chuyển sang Dương tính giả.')+
+    '</p><div class="actions"><button class="btn" value="cancel" autofocus>Hủy</button>'+
+    '<button class="btn primary" value="confirm">'+(undo?'Gỡ biện pháp':'Đánh dấu dương tính giả')+'</button></div></form>';
+  document.body.append(dialog);
+  dialog.addEventListener("close",()=>{
+    const confirmed = dialog.returnValue==="confirm";
+    dialog.remove();
+    if (confirmed) applyDecision();
+    else trigger.focus();
+  },{once:true});
+  dialog.showModal();
+});
+const themeInputs = document.querySelectorAll('.theme-picker input');
+function showTheme(value) {
+  document.documentElement.dataset.theme = value === "light" ? "light" : "dark";
+  for (const input of themeInputs) input.checked = input.value === document.documentElement.dataset.theme;
+}
+function restoreTheme() {
+  try { showTheme(localStorage.getItem("soc.theme")); }
+  catch { showTheme(document.documentElement.dataset.theme); }
+}
+restoreTheme();
+for (const input of themeInputs) input.addEventListener("change",()=>{
+  showTheme(input.value);
+  try { localStorage.setItem("soc.theme",input.value); } catch { /* Use this choice until navigation. */ }
+});
+window.addEventListener("storage", event=>{ if (event.key === "soc.theme" || event.key === null) restoreTheme(); });
+const lookup = document.querySelector("[data-lookup]");
+if (lookup) {
+  const input = lookup.querySelector("input");
+  const clear = lookup.querySelector("[data-clear]");
+  input.value = state.q;
+  const sync = () => { clear.disabled = !input.value && !state.q; };
+  const apply = value => {
+    const target = new URL(location.href);
+    if (value) target.searchParams.set("q",value);
+    else target.searchParams.delete("q");
+    target.searchParams.set("n","0");
+    target.hash = "lookup";
+    location.assign(target.href);
+  };
+  sync();
+  input.addEventListener("input",sync);
+  lookup.addEventListener("submit",event=>{
+    event.preventDefault();
+    apply(input.value.trim());
+  });
+  clear.addEventListener("click",()=>{
+    input.value = "";
+    sync();
+    if (state.q) apply("");
+    else input.focus();
+  });
+  if (location.hash === "#lookup") input.focus();
+}
+const phoneWidth = matchMedia("(max-width: 760px)");
+const quickId = tiView ? "block-15" : soarView ? "block-16" : "block-5";
+function syncQuickLinks() {
+  const layout = document.querySelector(".layout-preview");
+  const preview = document.getElementById(quickId);
+  const selectedLink = layout?.querySelector("[data-quick-link][aria-current]");
+  if (preview && selectedLink) {
+    if (phoneWidth.matches) (selectedLink.closest(".soar-ticket") || selectedLink).after(preview);
+    else layout.append(preview);
+  }
+  for (const link of document.querySelectorAll("[data-quick-link]")) link.hash = phoneWidth.matches ? quickId : "";
+}
+syncQuickLinks();
+phoneWidth.addEventListener("change",syncQuickLinks);
+if (location.hash === "#"+quickId) requestAnimationFrame(()=>document.getElementById(quickId)?.scrollIntoView());
+for (const menu of document.querySelectorAll(".choice")) {
+  menu.addEventListener("toggle",()=>{
+    menu.removeAttribute("data-align-end");
+    if (menu.open && menu.lastElementChild.getBoundingClientRect().right > document.documentElement.clientWidth - 8) {
+      menu.setAttribute("data-align-end","");
+    }
+  });
+}
+const reasonBox = document.querySelector(".wf-reason");
+reasonBox?.addEventListener("toggle",()=>{
+  state.uu = reasonBox.open ? "1" : "0";
+  document.body.dataset.uu = state.uu;
+});
+document.addEventListener("click",event=>{
+  for (const item of document.querySelectorAll(".choice[open]")) if (!item.contains(event.target)) item.open = false;
+  if (!event.target.matches("[data-demo]")) return;
+  const feedback = document.getElementById("demo-feedback");
+  feedback.hidden = false;
+  feedback.textContent = "Thao tác minh họa. Dữ liệu mẫu vẫn giữ nguyên.";
+});
+for (const search of document.querySelectorAll("[data-sample-search]")) {
+  search.addEventListener("input",()=>{
+    const terms = search.value.trim().toLocaleLowerCase("vi");
+    for (const item of search.closest(".panel").querySelectorAll("tbody tr, .records article")) item.hidden = !item.textContent.toLocaleLowerCase("vi").includes(terms);
+  });
+}
+document.addEventListener("keydown",event=>{
+  if(event.key!=="Escape") return;
+  const open=document.activeElement.closest(".choice[open]");
+  if(open){open.open=false;open.querySelector("summary").focus();}
+});
+</script>
+</body>
+</html>
