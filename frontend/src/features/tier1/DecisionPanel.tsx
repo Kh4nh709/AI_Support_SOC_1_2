@@ -290,9 +290,9 @@ function Panel({ view, onDone }: { view: AlertView; onDone?: (result: DecisionRe
       aria-labelledby={headingId}
       className="space-y-3 rounded border border-ai-border bg-surface p-3"
     >
-      <h3 id={headingId} className="text-sm font-semibold">
+      <h2 id={headingId} className="text-sm font-semibold">
         {S.decision.heading}
-      </h3>
+      </h2>
       {toast !== null && <Toast onClose={() => setToast(null)}>{toast}</Toast>}
       {problem?.at === "panel" && (
         <p role="alert" className="text-sm text-critical">

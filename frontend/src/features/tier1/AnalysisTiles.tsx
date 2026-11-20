@@ -25,7 +25,7 @@ export function AnalysisTiles({
   // A verdict the page has a scale for is two letters: the mock-up's 28 px figure. Any other is a word.
   const letters = verdict.tone !== "neutral";
   return (
-    <div className="grid grid-cols-4 gap-2">
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
       <ScoreTile
         label={P.tile.verdict}
         tone={verdict.tone}

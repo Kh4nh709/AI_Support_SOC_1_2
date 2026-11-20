@@ -26,10 +26,10 @@ const BYTES = new Intl.NumberFormat("vi-VN");
 
 /** The badge of an actor's role, in the canvas's colours. A role it has no colour for is shown in the plain one. */
 const ROLE_TONE: Readonly<Record<string, string>> = {
-  admin: "bg-[#2a1f12] text-[#fcd9a8]",
-  analyst: "bg-[#13203a] text-[#a9cbff]",
-  system: "bg-[#1c2530] text-[#aeb9c6]",
-  llm: "bg-[#17142a] text-[#c4b5fd]",
+  admin: "bg-console-warning-tint text-console-warning-text",
+  analyst: "bg-console-selected text-console-link-hover",
+  system: "bg-console-active text-console-secondary",
+  llm: "bg-ai-surface text-console-violet-text",
 };
 const PLAIN_TONE = "border border-border text-muted";
 
@@ -54,7 +54,7 @@ function Subject({ event }: { event: AuditEvent }) {
   ) : (
     <Link
       to={path}
-      className={`${MONO} text-[#7fb0ff] underline-offset-2 hover:text-[#a9cbff] hover:underline focus-visible:outline-2 focus-visible:outline-text`}
+      className={`${MONO} text-console-link underline-offset-2 hover:text-console-link-hover hover:underline focus-visible:outline-2 focus-visible:outline-text`}
     >
       {text}
     </Link>
@@ -68,10 +68,10 @@ function Payload({ event }: { event: AuditEvent }) {
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline gap-2.5 text-xs">
         <span className="text-muted">{P.payload}</span>
-        <span className="text-[#5e6b7a]">{P.payloadNote}</span>
+        <span className="text-console-disabled">{P.payloadNote}</span>
       </div>
       {size !== null && (
-        <p className="text-xs text-[#fcd9a8]">{P.payloadTooBig(BYTES.format(size))}</p>
+        <p className="text-xs text-console-warning-text">{P.payloadTooBig(BYTES.format(size))}</p>
       )}
       {text === "" ? (
         <p className="text-[13px] text-muted">{P.noPayload}</p>
@@ -83,7 +83,7 @@ function Payload({ event }: { event: AuditEvent }) {
 }
 
 const TOGGLE =
-  "rounded px-1.5 py-0.5 text-[#aeb9c6] hover:bg-ground focus-visible:outline-2 focus-visible:outline-text";
+  "rounded px-1.5 py-0.5 text-console-secondary hover:bg-ground focus-visible:outline-2 focus-visible:outline-text";
 
 export function AuditTable({ events, busy }: { events: readonly AuditEvent[]; busy: boolean }) {
   // The audit ids of the rows that are open. A row stays open when the list is read again, and a page that is
@@ -105,7 +105,7 @@ export function AuditTable({ events, busy }: { events: readonly AuditEvent[]; bu
       >
         <caption className="sr-only">{P.table}</caption>
         <thead>
-          <tr className="bg-[#18202a] text-muted">
+          <tr className="bg-console-dialog text-muted">
             <th scope="col" className="w-10 px-2 py-[11px] font-medium">
               <span className="sr-only">{P.colToggle}</span>
             </th>
@@ -138,7 +138,7 @@ export function AuditTable({ events, busy }: { events: readonly AuditEvent[]; bu
                 <tr
                   data-audit-id={event.audit_id}
                   data-alarm={alarm ? "true" : undefined}
-                  className={`border-t border-[#1f2833] align-top ${alarm ? "bg-[#1a1418]" : ""}`}
+                  className={`border-t border-console-divider align-top ${alarm ? "bg-console-alarm-row" : ""}`}
                 >
                   <td className="px-2 py-[11px]">
                     <button
@@ -152,7 +152,7 @@ export function AuditTable({ events, busy }: { events: readonly AuditEvent[]; bu
                       <span aria-hidden="true">{isOpen ? "▾" : "▸"}</span>
                     </button>
                   </td>
-                  <td className="px-2.5 py-[11px] whitespace-nowrap text-[#aeb9c6]">
+                  <td className="px-2.5 py-[11px] whitespace-nowrap text-console-secondary">
                     <time dateTime={event.created_at} title={formatDateTime(event.created_at)}>
                       {time}
                     </time>
@@ -176,10 +176,10 @@ export function AuditTable({ events, busy }: { events: readonly AuditEvent[]; bu
                   <td className="px-2.5 py-[11px]">
                     <Subject event={event} />
                   </td>
-                  <td className="px-4 py-[11px] text-[#c9d3df]">{summaryOf(event)}</td>
+                  <td className="px-4 py-[11px] text-console-body">{summaryOf(event)}</td>
                 </tr>
                 {isOpen && (
-                  <tr id={payloadId} className="bg-[#10151c]">
+                  <tr id={payloadId} className="bg-console-table-heading">
                     <td colSpan={6} className="pr-4 pb-3.5 pl-[146px]">
                       <Payload event={event} />
                     </td>

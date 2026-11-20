@@ -2,7 +2,7 @@
 // sections that show only when the view carries their data, a duplicate, the case link, hostile log text,
 // the live refetch, and the ① column as the page hands it the state of the view.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { http, HttpResponse } from "msw";
@@ -242,6 +242,14 @@ const heading3 = (name: string) => screen.queryByRole("heading", { level: 3, nam
 const valueOf = (label: string) => screen.getByText(label, { selector: "dt" }).nextElementSibling;
 const loaded = () => screen.findByRole("heading", { level: 1 });
 
+function openWorkspaceTab(name: string) {
+  fireEvent.click(
+    within(screen.getByRole("tablist", { name: S.workspace.sections })).getByRole("tab", {
+      name,
+    }),
+  );
+}
+
 describe("the page", () => {
   it("shows the summary of the alert: band, category, status, description, rule, agent, count and times", async () => {
     renderPage();
@@ -259,20 +267,17 @@ describe("the page", () => {
     expect(valueOf(S.alert.summary.lastSeen)).toHaveTextContent("30/09 09:31");
   });
 
-  it("puts the left column and the right column side by side, each under its heading", async () => {
+  it("presents evidence first and opens the AI panel from its tab", async () => {
     renderPage();
     await loaded();
-    const left = screen.getByRole("heading", { level: 2, name: S.alert.infoHeading });
-    const right = screen.getByRole("heading", { level: 2, name: S.alert.aiHeading });
-    expect(left).toBeInTheDocument();
-    expect(right).toBeInTheDocument();
-    expect(within(aiColumn()).getByRole("heading", { level: 2, name: S.alert.aiHeading })).toBe(
-      right,
-    );
-    // the left column comes first in the reading order
-    expect(left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.getByText(S.alert.infoHint)).toBeInTheDocument();
-    expect(screen.getByText(S.alert.aiHint)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: S.alert.infoHeading })).toBeVisible();
+    expect(screen.getByText(S.alert.infoHint)).toBeVisible();
+    expect(screen.queryByRole("region", { name: S.alert.aiHeading })).not.toBeInTheDocument();
+    openWorkspaceTab(S.workspace.analysis);
+    expect(
+      within(aiColumn()).getByRole("heading", { level: 2, name: S.alert.aiHeading }),
+    ).toBeVisible();
+    expect(screen.getByText(S.alert.aiHint)).toBeVisible();
   });
 
   it("links back to the queue, and names the alert", async () => {
@@ -542,18 +547,21 @@ describe("the ① column, from the state of the view", () => {
     views = { a1: full({ correlated_now: 6 }) };
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     expect(within(aiColumn()).getByText(S.ai1.correlatedChanged(4, 6))).toBeInTheDocument();
   });
 
   it("says nothing of it when the count is the same", async () => {
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     expect(screen.queryByText(/gợi ý dựa trên/)).not.toBeInTheDocument();
   });
 
   it("shows ① for the visible arm", async () => {
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     expect(within(aiColumn()).getByText(/AI kết luận/)).toHaveTextContent(
       "AI kết luận: TP (độ tin cậy trung bình)",
     );
@@ -564,6 +572,7 @@ describe("the ① column, from the state of the view", () => {
     views = { a1: full({ analysis: analysis() }) };
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     const col = aiColumn();
     expect(
       within(col)
@@ -589,11 +598,13 @@ describe("the ① column, from the state of the view", () => {
     views = { a1: full({ analysis: analysis() }) };
     const first = renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     await userEvent.setup().click(within(aiColumn()).getByRole("tab", { name: "Kỹ thuật" }));
     expect(within(aiColumn()).getByRole("tabpanel")).toHaveTextContent("Nhãn MITRE của alert");
     first.unmount();
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     expect(within(aiColumn()).getByRole("tab", { name: "Tổng quan" })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -604,6 +615,7 @@ describe("the ① column, from the state of the view", () => {
     views = { a1: blind({ analysis: analysis() }) };
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     expect(within(aiColumn()).getByText(S.ai1.hidden)).toBeInTheDocument();
     expect(within(aiColumn()).queryByRole("tablist")).not.toBeInTheDocument();
     expect(within(aiColumn()).queryByRole("group")).not.toBeInTheDocument();
@@ -625,6 +637,7 @@ describe("the ① column, from the state of the view", () => {
     };
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     expect(within(aiColumn()).getByText(/AI kết luận/)).toHaveTextContent(
       "AI kết luận: FP (độ tin cậy trung bình) — có cảnh báo kiểm chứng: " +
         "tài sản quan trọng hoặc chưa rõ, không khớp bảng quyết định đã duyệt",
@@ -645,6 +658,7 @@ describe("the ① column, from the state of the view", () => {
     };
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     expect(within(aiColumn()).getByRole("img", { name: S.ai1.forcedLabel })).toBeInTheDocument();
     expect(within(aiColumn()).getByText(S.ai1.gateForced)).toBeInTheDocument();
   });
@@ -674,6 +688,7 @@ describe("the ① column, from the state of the view", () => {
     };
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     expect(within(aiColumn()).getByText(/AI kết luận/).textContent).toBe(
       "AI kết luận: FP — trùng 62% với tri thức đã duyệt — " +
         "có cảnh báo kiểm chứng: tài sản quan trọng hoặc chưa rõ",
@@ -706,6 +721,7 @@ describe("the ① column, from the state of the view", () => {
     };
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     expect(within(aiColumn()).getByText(/AI kết luận/).textContent).toBe(
       "AI kết luận: TP (độ tin cậy trung bình) — " +
         "trùng cao nhất 47% với tri thức đã duyệt (dưới mức tối thiểu 50%) — " +
@@ -719,6 +735,7 @@ describe("the ① column, from the state of the view", () => {
     };
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     const col = aiColumn();
     expect(within(col).getByText(S.ai1.hidden)).toBeInTheDocument();
     for (const word of [
@@ -738,6 +755,7 @@ describe("the ① column, from the state of the view", () => {
     for (const said of [S.ai1.pending, S.ai1.unavailable, S.ai1.none]) {
       expect(col.textContent, said).not.toContain(said);
     }
+    openWorkspaceTab(S.workspace.alertDecision);
     expect(
       await screen.findByRole("radio", { name: S.decision.falsePositive }),
     ).toBeInTheDocument();
@@ -747,6 +765,7 @@ describe("the ① column, from the state of the view", () => {
     views = { a1: blind() };
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     expect(screen.queryByText(S.ai1.action.true_positive)).not.toBeInTheDocument();
     expect(screen.queryByText(/AI kết luận/)).not.toBeInTheDocument();
     expect(screen.queryByText(S.queue.retriageMark)).not.toBeInTheDocument();
@@ -760,6 +779,7 @@ describe("the ① column, from the state of the view", () => {
     views = { a1: sparse({ description: "d" }) };
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     expect(within(aiColumn()).getByText(S.ai1.pending)).toBeInTheDocument();
     expect(requests).toHaveLength(1);
     views = { a1: full({ description: "d" }) };
@@ -790,6 +810,7 @@ describe("the ① column, from the state of the view", () => {
     views = { a1: blind({ description: "d" }) };
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     expect(within(aiColumn()).getByText(S.ai1.hidden)).toBeInTheDocument();
     act(() => live().onStatus("live")); // one resync of the socket coming up, then no clock
     await act(async () => {
@@ -806,6 +827,7 @@ describe("the ① column, from the state of the view", () => {
     views = { a1: sparse({ triage_status: "unavailable", description: "d" }) };
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     expect(within(aiColumn()).getByText(S.ai1.unavailable)).toBeInTheDocument();
     expect(within(aiColumn()).queryByText(S.ai1.stoppedByLabel)).not.toBeInTheDocument();
   });
@@ -820,6 +842,7 @@ describe("the ① column, from the state of the view", () => {
     };
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     const column = within(aiColumn());
     expect(column.getByText(S.ai1.unavailable)).toBeInTheDocument();
     expect(column.getByText(S.ai1.stoppedByLabel)).toBeInTheDocument();
@@ -838,6 +861,7 @@ describe("the ① column, from the state of the view", () => {
     };
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     const column = within(aiColumn());
     expect(column.getByText(S.ai1.hidden)).toBeInTheDocument();
     expect(column.queryByText(S.ai1.unavailable)).not.toBeInTheDocument();
@@ -851,6 +875,7 @@ describe("the ① column, from the state of the view", () => {
     };
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     expect(within(aiColumn()).getByText(S.ai1.decidedHeading)).toBeInTheDocument();
   });
 
@@ -879,11 +904,14 @@ describe("the ① column, from the state of the view", () => {
     );
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.analysis);
     expect(within(aiColumn()).getByText(S.ai1.hidden)).toBeInTheDocument();
     const user = userEvent.setup();
+    openWorkspaceTab(S.workspace.alertDecision);
     await user.click(await screen.findByRole("radio", { name: S.decision.falsePositive }));
     await user.type(screen.getByLabelText(S.decision.reason), "không có dấu hiệu tấn công");
     await user.click(screen.getByRole("button", { name: S.decision.submit }));
+    openWorkspaceTab(S.workspace.analysis);
     expect(await within(aiColumn()).findByText(S.ai1.decidedHeading)).toBeInTheDocument();
     expect(within(aiColumn()).getByText(S.ai1.decidedAi).closest("div")).toHaveTextContent(
       S.ai1.action.true_positive,
@@ -900,6 +928,7 @@ describe("the decision panel on the page", () => {
     };
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.alertDecision);
     expect(await screen.findByRole("radio", { name: S.decision.benign })).toBeInTheDocument();
     expect(meCalls).toBe(1);
   });
@@ -910,6 +939,7 @@ describe("the decision panel on the page", () => {
     };
     renderPage("/alerts/a1", role);
     await loaded();
+    expect(screen.queryByRole("tab", { name: S.workspace.alertDecision })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: S.decision.acknowledge })).not.toBeInTheDocument();
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: S.decision.heading })).not.toBeInTheDocument();
@@ -932,11 +962,13 @@ describe("the decision panel on the page", () => {
     );
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.alertDecision);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: S.decision.acknowledge }));
     expect(
       await screen.findByRole("radio", { name: S.decision.falsePositive }),
     ).toBeInTheDocument();
+    openWorkspaceTab(S.workspace.evidence);
     expect(within(summary()).getByText(S.status.tier1_active)).toBeInTheDocument();
   });
 });
@@ -978,6 +1010,7 @@ describe("the count a decision is made on, across a live refetch (ruling R19)", 
     );
     renderPage();
     await loaded();
+    openWorkspaceTab(S.workspace.alertDecision);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("radio", { name: S.decision.falsePositive }));
     await user.type(
@@ -1036,6 +1069,7 @@ describe("the SOAR enrichment (S3)", () => {
     expect(column.getByText(SC03.triage!.signal_text!)).toBeInTheDocument();
     expect(heading3(S.alert.soar.geoTitle)).toBeNull(); // SC03 has no geo
     // none of it is in the ① column
+    openWorkspaceTab(S.workspace.analysis);
     expect(within(aiColumn()).queryByText("Case TheHive: #55")).toBeNull();
   });
 
@@ -1066,6 +1100,7 @@ describe("the SOAR enrichment (S3)", () => {
     await loaded();
     expect(heading3(S.alert.soar.caseTitle)).toBeInTheDocument();
     expect(screen.getByText("Case TheHive: #55")).toBeInTheDocument();
+    openWorkspaceTab(S.workspace.analysis);
     const column = aiColumn();
     expect(within(column).queryByText("Case TheHive: #55")).toBeNull();
     expect(within(column).getByText(S.ai1.hidden)).toBeInTheDocument();
@@ -1325,6 +1360,7 @@ describe("accessibility", () => {
     await loaded();
     // the form of a held alert appears once /me has said whose it is
     if (role === "tier1" && answers.a1?.status === "tier1_active") {
+      openWorkspaceTab(S.workspace.alertDecision);
       await screen.findByRole("radio", { name: S.decision.benign });
     }
     expect(await violations(document.body)).toEqual([]);
@@ -1339,4 +1375,14 @@ describe("accessibility", () => {
     await screen.findByRole("heading", { name: S.alert.notFound });
     expect(await violations(document.body)).toEqual([]);
   });
+});
+
+it("opens the analyst action tab from the alert header while keeping evidence separate", async () => {
+  renderPage();
+  await loaded();
+  expect(screen.getByRole("tab", { name: "Bằng chứng", selected: true })).toBeVisible();
+  expect(screen.queryByRole("button", { name: S.decision.acknowledge })).not.toBeInTheDocument();
+  await userEvent.setup().click(screen.getByRole("button", { name: "Xử lý cảnh báo" }));
+  expect(screen.getByRole("tab", { name: "Quyết định xử lý", selected: true })).toHaveFocus();
+  expect(screen.getByRole("button", { name: S.decision.acknowledge })).toBeVisible();
 });

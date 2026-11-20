@@ -1,5 +1,5 @@
 // The page "Threat Intel" (`/threat-intel`, all three roles; DEC-224): the abuse.ch IOCs the host's daily script collects, through the
-// importer and the API. Top to bottom: the status bar (and its stale banner), the four KPI cards, the two charts, then the filters, the
+// importer and the API. The lookup starts with the filters, the
 // export (the admin's) and the table of IOCs with its pagination and a detail panel. The view (the filters, the search, the page) is in
 // the URL; the status and the stats ask again every five minutes. Every IOC field is text from a public feed: printed as text, a value
 // that is a URL, a domain or an address defanged, never a link and never fetched; the copy button copies the original; the one link is
@@ -85,26 +85,31 @@ export function TiPage() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="soc-workspace soc-lookup flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-baseline gap-3">
         <h1 className="text-lg font-semibold">{S.ti.title}</h1>
         {data !== undefined && <p className="text-sm text-muted">{S.ti.count(data.total)}</p>}
       </div>
-
-      <StatusBar />
-      <StatsSection />
 
       <div className="flex flex-wrap items-start justify-between gap-4">
         <TiFilters
           draft={draft}
           onDraft={setDraft}
           filtered={filtered}
-          onSend={() => show(viewOfDraft(draft))}
-          onClear={() => show(EMPTY_VIEW)}
+          onSend={() => {
+            const next = viewOfDraft(draft);
+            setDraft(draftOf(next));
+            show(next);
+          }}
+          onClear={() => {
+            setDraft(draftOf(EMPTY_VIEW));
+            if (filtered || view.page !== 1) show(EMPTY_VIEW);
+          }}
         />
         <ExportControl filters={filtersOf(view)} unapplied={unapplied} />
       </div>
 
+      <StatusBar />
       {query.isError && (
         <SectionError
           error={query.error}
@@ -113,7 +118,7 @@ export function TiPage() {
         />
       )}
 
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+      <div className="soc-lookup-layout">
         {shownDetail !== null && <TiDetail ioc={shownDetail} onClose={closeDetail} />}
         <div className="flex min-w-0 flex-1 flex-col gap-4">
           {data === undefined ? (
@@ -130,6 +135,7 @@ export function TiPage() {
                 rows={data.rows}
                 rowKey={(row) => String(row.id)}
                 empty={emptyText(data.total)}
+                cards={{ selected: shownDetail ? String(shownDetail.id) : undefined }}
                 busy={query.isPlaceholderData}
               />
               <TiPagination
@@ -143,6 +149,12 @@ export function TiPage() {
           )}
         </div>
       </div>
+      <details className="rounded-xl border border-border bg-surface p-3">
+        <summary className="cursor-pointer text-sm font-medium">{S.ti.statistics}</summary>
+        <div className="mt-3 grid min-w-0 gap-3">
+          <StatsSection />
+        </div>
+      </details>
     </div>
   );
 }

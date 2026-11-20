@@ -29,7 +29,66 @@ const field = (panel: HTMLElement, label: string) => {
   return term.nextElementSibling as HTMLElement;
 };
 
+describe("responding from the selected ticket", () => {
+  it.each(["keep", "undo", "fp"] as const)(
+    "sends one %s for the ticket in the panel",
+    async (decision) => {
+      const row = review({
+        buttons: [{ decision, label: "Phản hồi mẫu" }],
+        allowed_decisions: [decision],
+      });
+      const state = fake({ rows: [row] });
+      serve(server, state);
+      renderSoar();
+      const panel = await open(row.id);
+      await userEvent.click(await within(panel).findByRole("button", { name: "Phản hồi mẫu" }));
+      if (decision !== "keep") {
+        expect(state.decisions).toHaveLength(0);
+        const dialog = await screen.findByRole("dialog");
+        await userEvent.click(
+          within(dialog).getByRole("button", { name: S.soar.dialog.confirm[decision] }),
+        );
+      }
+      await waitFor(() => expect(state.decisions).toHaveLength(1));
+      expect(state.decisions[0]).toMatchObject({ id: row.id, body: { decision } });
+    },
+  );
+
+  it("keeps a refused decision out of the panel", async () => {
+    const row = review({ allowed_decisions: ["keep"] });
+    serve(server, fake({ rows: [row] }));
+    renderSoar();
+    const panel = await open(row.id);
+    await within(panel).findByRole("button", { name: "✅ Giữ chặn" });
+    expect(within(panel).queryByRole("button", { name: "↩️ Gỡ chặn IP" })).not.toBeInTheDocument();
+  });
+});
+
 describe("opening and closing", () => {
+  it("selects the whole card from its body and leaves response buttons independent", async () => {
+    const first = review();
+    const second = review({ id: "B2C3D4E5", host: "host-two" });
+    const state = fake({ rows: [first, second] });
+    serve(server, state);
+    renderSoar();
+    const firstOpener = await screen.findByRole("button", { name: S.soar.detail.open(first.id) });
+    const firstCard = firstOpener.closest("tr")!;
+    const secondOpener = screen.getByRole("button", { name: S.soar.detail.open(second.id) });
+    const secondCard = secondOpener.closest("tr")!;
+
+    await userEvent.click(firstCard);
+    await screen.findByRole("region", { name: S.soar.detail.title(first.id) });
+    expect(firstCard).toHaveAttribute("data-picked");
+    await userEvent.click(within(secondCard).getByText("host-two"));
+    await screen.findByRole("region", { name: S.soar.detail.title(second.id) });
+    expect(firstCard).not.toHaveAttribute("data-picked");
+    expect(secondCard).toHaveAttribute("data-picked");
+    await userEvent.click(within(firstCard).getByRole("button", { name: "↩️ Gỡ chặn IP" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(secondCard).toHaveAttribute("data-picked");
+    expect(state.decisions).toHaveLength(0);
+  });
+
   it("opens from a row, reads the review by its id, and is named by its title", async () => {
     const state = fake({ rows: [review()] });
     serve(server, state);

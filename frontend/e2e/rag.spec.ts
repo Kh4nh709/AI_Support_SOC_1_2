@@ -17,6 +17,7 @@ import {
   waitForStatus,
   waitForTriage,
   type Posted,
+  openWorkspaceTab,
 } from "./fixtures";
 import { seedFailedLookup, seedFoundLookup, seedRun } from "./ragFixtures";
 
@@ -42,6 +43,7 @@ test("an alert whose lookup failed says that the RAG was not applied, and why", 
 
   await loginAs(page, "t1");
   await page.goto(`/alerts/${head.id}`);
+  await openWorkspaceTab(page, S.workspace.analysis);
 
   const col = column(page);
   await expect(col.getByRole("group", { name: S.ai1.panel.tile.verdict })).toContainText(
@@ -77,6 +79,7 @@ test("an alert that matched approved knowledge says how strongly, on the RAG til
 
   await loginAs(page, "t1");
   await page.goto(`/alerts/${head.id}`);
+  await openWorkspaceTab(page, S.workspace.analysis);
 
   const col = column(page);
   // the best of the three matches, as a whole percentage, on the tile
@@ -105,6 +108,7 @@ test("an alert whose RAG was not used says nothing of it", async ({ page, reques
 
   await loginAs(page, "t1");
   await page.goto(`/alerts/${head.id}`);
+  await openWorkspaceTab(page, S.workspace.analysis);
 
   const col = column(page);
   await expect(col.getByRole("group", { name: S.ai1.panel.tile.verdict })).toContainText(
@@ -142,6 +146,7 @@ test("every closed failure kind is worded, and the provider's words are nowhere"
     seedRun(head.id, { warnings: [`rag_not_applied:${kind}`] });
     seedFailedLookup(head.id, kind);
     await page.goto(`/alerts/${head.id}`);
+    await openWorkspaceTab(page, S.workspace.analysis);
     await expect(column(page).getByRole("note")).toHaveText(
       `⚠ Không áp dụng RAG cho alert này: ${label} — ${TAIL}`,
     );

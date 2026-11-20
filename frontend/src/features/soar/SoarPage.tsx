@@ -5,7 +5,7 @@
 // stays on its row (see `useDecisions`), and none of the page's state (the dialog, its note, the open detail panel, an error
 // line) is in the query cache, so a refetch never wipes it. Everything n8n wrote is text.
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import { useSearchParams } from "react-router";
 import {
   fetchSoarReviews,
@@ -13,13 +13,14 @@ import {
   type SoarDecision,
   type SoarListResponse,
   type SoarReview,
+  type SoarReviewDetail,
 } from "../../api/soar";
 import { useAuth } from "../../auth/AuthProvider";
 import { DataTable } from "../../components/DataTable";
 import { Toast } from "../../components/Toast";
 import { S } from "../../strings";
 import { SoarClock } from "./Clock";
-import { cleanDeep } from "./model";
+import { buttonsOf, cleanDeep } from "./model";
 import { DecisionDialog, type DialogDecision } from "./DecisionDialog";
 import { DetailPanel } from "./DetailPanel";
 import { NoticeStrip } from "./Notices";
@@ -31,10 +32,22 @@ import { SOAR_LIST_POLL_MS, soarKeys } from "./soarQueries";
 import { listQueryOf, readView, viewToParams, type SoarView } from "./soarParams";
 import { noticeColumns, reviewColumns } from "./SoarTable";
 import { readDismissed, writeDismissed } from "./storage";
-import { useDecisions } from "./useDecisions";
+import { RowActions } from "./RowActions";
+import { sameStamp, stampOf, useDecisions } from "./useDecisions";
 
 /** What the notices above the table are read from: the newest of them, the page does the rest. */
 const NOTICE_FETCH = { kind: "notice", page: 1, pageSize: SOAR_PAGE_SIZE } as const;
+
+function openCardFromSurface(event: MouseEvent<HTMLDivElement>) {
+  const target = event.target;
+  if (!(target instanceof Element) || target.closest("button, a, input, select, textarea, summary"))
+    return;
+  if (window.getSelection()?.isCollapsed === false) return;
+  target
+    .closest("[data-record]")
+    ?.querySelector<HTMLButtonElement>("button[data-soar-open]")
+    ?.click();
+}
 
 export function SoarPage({ now = Date.now }: { now?: () => number }) {
   const [params, setParams] = useSearchParams();
@@ -61,6 +74,7 @@ export function SoarPage({ now = Date.now }: { now?: () => number }) {
 
   // The page's own state: nothing of it lives in the cache, so a refetch cannot touch it.
   const [dialog, setDialog] = useState<{ row: SoarReview; decision: DialogDecision } | null>(null);
+  const [actionFromPanel, setActionFromPanel] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
   // The button that opened the panel, so the focus can go back to it when the panel is closed.
   const [opener, setOpener] = useState<HTMLElement | null>(null);
@@ -74,7 +88,8 @@ export function SoarPage({ now = Date.now }: { now?: () => number }) {
     setDismissed(next);
     writeDismissed(next);
   };
-  const press = (row: SoarReview, decision: SoarDecision) => {
+  const press = (row: SoarReview, decision: SoarDecision, fromPanel = false) => {
+    setActionFromPanel(fromPanel);
     // a gesture the page handles anyway: if the signal is on, the audio context is made now (the tone needs one)
     primeAudio();
     if (decision === "keep") void decisions.run(row, "keep", "");
@@ -108,14 +123,41 @@ export function SoarPage({ now = Date.now }: { now?: () => number }) {
     data === undefined || query.isPlaceholderData ? "unknown" : liveRow === null ? "gone" : "ok";
   const columns =
     view.tab === "notice"
-      ? noticeColumns({ dismissed: dismissedSet, onDismiss: dismiss, onOpen: openDetail })
+      ? noticeColumns({ dismissed: dismissedSet, onDismiss: dismiss, onOpen: openDetail, detailId })
       : reviewColumns({
+          detailId,
           states: decisions.states,
           me: session?.username ?? null,
-          focus: decisions.focus,
+          focus: actionFromPanel && detailId === decisions.focus?.id ? null : decisions.focus,
           onPress: press,
           onOpen: openDetail,
         });
+
+  function panelActions(detail: SoarReviewDetail) {
+    const row = data?.rows.find((item) => item.id === detail.id);
+    if (
+      !row ||
+      row.kind !== "review" ||
+      query.isPlaceholderData ||
+      query.isError ||
+      !sameStamp(stampOf(row), stampOf(detail))
+    )
+      return null;
+    const inDetail = buttonsOf(detail).map((button) => button.decision);
+    const allowed = buttonsOf(row)
+      .map((button) => button.decision)
+      .filter((decision) => inDetail.includes(decision));
+    if (!allowed.length) return null;
+    return (
+      <RowActions
+        row={{ ...row, allowed_decisions: allowed }}
+        state={Object.hasOwn(decisions.states, row.id) ? decisions.states[row.id] : undefined}
+        me={session?.username ?? null}
+        focus={actionFromPanel ? decisions.focus : null}
+        onPress={(current, decision) => press(current, decision, true)}
+      />
+    );
+  }
 
   function emptyText(total: number): string {
     if (total > 0) return S.soar.pageEmpty;
@@ -125,7 +167,7 @@ export function SoarPage({ now = Date.now }: { now?: () => number }) {
 
   return (
     <SoarClock now={now}>
-      <div className="flex flex-col gap-4">
+      <div className="soc-workspace soc-lookup flex min-w-0 flex-col gap-4">
         <div className="flex flex-wrap items-baseline gap-3">
           <h1 className="text-lg font-semibold">{S.soar.title}</h1>
           {data !== undefined && <p className="text-sm text-muted">{S.soar.count(data.total)}</p>}
@@ -166,8 +208,11 @@ export function SoarPage({ now = Date.now }: { now?: () => number }) {
           </div>
         )}
 
-        <div className="flex items-start gap-4">
-          <div className="flex min-w-0 flex-1 flex-col gap-4">
+        <div className="soc-lookup-layout">
+          {detailId !== null && (
+            <DetailPanel id={detailId} onClose={closeDetail} actions={panelActions} />
+          )}
+          <div className="flex min-w-0 flex-1 flex-col gap-4" onClick={openCardFromSurface}>
             {data === undefined ? (
               !query.isError && (
                 <p role="status" className="text-sm text-muted">
@@ -182,6 +227,7 @@ export function SoarPage({ now = Date.now }: { now?: () => number }) {
                   rows={data.rows}
                   rowKey={(row) => row.id}
                   empty={emptyText(data.total)}
+                  cards={{ selected: detailId ?? undefined }}
                   busy={query.isPlaceholderData}
                 />
                 <SoarPagination
@@ -193,7 +239,6 @@ export function SoarPage({ now = Date.now }: { now?: () => number }) {
               </>
             )}
           </div>
-          {detailId !== null && <DetailPanel id={detailId} onClose={closeDetail} />}
         </div>
       </div>
 

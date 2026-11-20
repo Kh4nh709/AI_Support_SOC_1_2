@@ -17,10 +17,11 @@ import {
 import { BandBadge } from "../../components/Badge";
 import { CategoryText } from "../../components/CategoryText";
 import { DataTable, type Column } from "../../components/DataTable";
+import { RecordWorkspace, type PickRecord } from "../../components/RecordWorkspace";
 import { formatTime } from "../../format";
 import { useLiveStatus } from "../../live/LiveProvider";
 import { OFFLINE_POLL_MS } from "../../live/poll";
-import { S } from "../../strings";
+import { S, labelOf } from "../../strings";
 import { AiCell } from "./AiCell";
 import { aiStateOfRow } from "./aiState";
 import { BandChips, QueueFilterBar } from "./QueueFilterBar";
@@ -32,16 +33,22 @@ import { RiskOrderButton, SortHeader, ariaSortOf } from "./SortControls";
  * The columns of the table. The header of last seen, occurrences and agent is a button that sorts by it; the
  * `<th>` of the column the rows are sorted by carries `aria-sort`, the others carry none.
  */
+const alertKey = (row: QueueRow) => row.alert_id;
+const alertTitle = (row: QueueRow) => row.description || row.alert_id;
+const alertHref = (row: QueueRow) => `/alerts/${encodeURIComponent(row.alert_id)}`;
+
 function columnsFor(
   sort: QueueSort | undefined,
   onSort: (key: QueueSortKey) => void,
+  pick: PickRecord<QueueRow>,
 ): Column<QueueRow>[] {
   const sortable = (
     key: QueueSortKey,
     label: string,
-  ): Pick<Column<QueueRow>, "header" | "ariaSort"> => {
+  ): Pick<Column<QueueRow>, "header" | "ariaSort" | "sortable"> => {
     const direction = sort?.key === key ? sort.dir : undefined;
     return {
+      sortable: true,
       header: <SortHeader label={label} direction={direction} onSort={() => onSort(key)} />,
       ...(direction !== undefined && { ariaSort: ariaSortOf(direction) }),
     };
@@ -51,27 +58,29 @@ function columnsFor(
     {
       id: "description",
       header: S.queue.col.description,
-      className: "max-w-xl",
       cell: (row) => (
-        <>
-          <Link
-            to={`/alerts/${encodeURIComponent(row.alert_id)}`}
-            className="underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-text"
-          >
-            {row.description}
-          </Link>
-          <span className="ml-2 font-mono text-xs text-muted">{S.queue.rule(row.rule_id)}</span>
-          {row.needs_retriage && (
-            <span
-              role="img"
-              aria-label={S.queue.retriage}
-              title={S.queue.retriage}
-              className="ml-2 text-medium"
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <Link
+              to={alertHref(row)}
+              className="font-semibold underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-text"
             >
-              {S.queue.retriageMark}
-            </span>
-          )}
-        </>
+              {alertTitle(row)}
+            </Link>
+            <span className="ml-2 font-mono text-xs text-muted">{S.queue.rule(row.rule_id)}</span>
+            {row.needs_retriage && (
+              <span
+                role="img"
+                aria-label={S.queue.retriage}
+                title={S.queue.retriage}
+                className="ml-2 text-medium"
+              >
+                {S.queue.retriageMark}
+              </span>
+            )}
+          </div>
+          {pick(row)}
+        </div>
       ),
     },
     {
@@ -133,7 +142,6 @@ export function QueuePage() {
   // A new filter or a new sort starts again from the first page; a filter keeps the sort.
   const filter = (next: QueueFilters) => show({ filters: next, page: 1, ...(sort && { sort }) });
   const sortBy = (key: QueueSortKey) => show({ filters, page: 1, sort: nextSort(sort, key) });
-  const columns = columnsFor(sort, sortBy);
   const filtered =
     Boolean(filters.band || filters.category || filters.agent) || filters.status === "mine";
   const narrowed = Boolean(filters.band || filters.category || filters.agent);
@@ -146,9 +154,9 @@ export function QueuePage() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="soc-workspace flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-baseline gap-3">
-        <h1 className="text-lg font-semibold">{S.queue.title}</h1>
+        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">{S.queue.title}</h1>
         {data !== undefined && (
           <p className="text-sm text-muted">
             {filters.status === "mine" ? S.queue.countMine(data.total) : S.queue.count(data.total)}
@@ -205,13 +213,33 @@ export function QueuePage() {
         )
       ) : (
         <>
-          <DataTable
-            label={S.queue.tableLabel}
-            columns={columns}
+          <RecordWorkspace
             rows={data.rows}
-            rowKey={(row) => row.alert_id}
-            empty={emptyText(data.total)}
-            busy={query.isPlaceholderData}
+            rowKey={alertKey}
+            title={alertTitle}
+            href={alertHref}
+            action={S.workspace.openAlert}
+            fields={(row) => [
+              [S.queue.col.band, <BandBadge label={row.risk_band} />],
+              [S.queue.col.ai, <AiCell state={aiStateOfRow(row)} />],
+              [S.queue.filter.status, labelOf(S.status, row.status)],
+              [S.queue.col.occurrences, row.occurrence_count],
+              [S.queue.col.category, <CategoryText code={row.category} />],
+              [S.queue.col.agent, row.agent_name || S.common.missing],
+              [S.queue.col.user, row.alert_user || S.common.missing],
+              [S.queue.col.srcip, row.srcip || S.common.missing],
+            ]}
+            list={(selected, pick, afterRow) => (
+              <DataTable
+                label={S.queue.tableLabel}
+                columns={columnsFor(sort, sortBy, pick)}
+                rows={data.rows}
+                rowKey={alertKey}
+                empty={emptyText(data.total)}
+                busy={query.isPlaceholderData}
+                cards={{ selected, afterRow }}
+              />
+            )}
           />
           <QueuePagination
             view={view}

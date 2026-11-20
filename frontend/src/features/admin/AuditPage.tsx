@@ -49,11 +49,11 @@ const NUMBER = new Intl.NumberFormat("vi-VN");
 
 const CARD = "flex flex-col gap-3 rounded-[10px] border border-border bg-surface px-5 py-5";
 const OUTLINE_BUTTON =
-  "h-[38px] rounded-md border border-[#2e3a48] px-3 text-[13.5px] text-[#c9d3df] hover:bg-ground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-text";
+  "h-[38px] rounded-md border border-console-outline px-3 text-[13.5px] text-console-body hover:bg-ground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-text";
 const PAGER_BUTTON =
-  "h-[34px] rounded-md border border-[#2e3a48] px-3 text-[13px] text-[#c9d3df] hover:bg-ground focus-visible:outline-2 focus-visible:outline-text disabled:cursor-not-allowed disabled:text-[#5e6b7a] disabled:hover:bg-transparent";
+  "h-[34px] rounded-md border border-console-outline px-3 text-[13px] text-console-body hover:bg-ground focus-visible:outline-2 focus-visible:outline-text disabled:cursor-not-allowed disabled:text-console-disabled disabled:hover:bg-transparent";
 const CONTROL =
-  "h-[38px] rounded-md border bg-[#0f141b] px-2.5 text-[13.5px] text-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-text";
+  "h-[38px] rounded-md border bg-console-inset px-2.5 text-[13.5px] text-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-text";
 
 // --- the filter form --------------------------------------------------------------------------------------------
 
@@ -90,7 +90,7 @@ function Field({
       </label>
       {children}
       {fault && (
-        <p id={faultId} className="max-w-[220px] text-[12.5px] text-[#fda4af]">
+        <p id={faultId} className="max-w-[220px] text-[12.5px] text-console-danger-text">
           {P.fieldFault(label)}
         </p>
       )}
@@ -140,7 +140,7 @@ function FilterForm({
 
   const invalid = (name: FilterField) =>
     fault === name ? { "aria-invalid": true, "aria-describedby": faultIds[name] } : {};
-  const border = (name: FilterField) => (fault === name ? "border-[#5a2e36]" : "border-[#2e3a48]");
+  const border = (name: FilterField) => (fault === name ? "border-console-danger-outline" : "border-console-outline");
 
   return (
     <form
@@ -253,7 +253,7 @@ function Skeleton() {
     >
       <span className="sr-only">{S.common.loading}</span>
       {["a", "b", "c", "d", "e", "f", "g", "h"].map((key) => (
-        <div key={key} className="h-11 animate-pulse rounded-md bg-[#1c2530]" />
+        <div key={key} className="h-11 animate-pulse rounded-md bg-console-active" />
       ))}
     </div>
   );
@@ -274,7 +274,7 @@ function NoMatch({ view, onClear }: { view: AuditView; onClear: () => void }) {
   return (
     <div className={CARD}>
       <h2 className="text-[17px] font-semibold">{P.noMatchTitle}</h2>
-      <p className="text-[13.5px] leading-relaxed text-[#c9d3df]">
+      <p className="text-[13.5px] leading-relaxed text-console-body">
         {P.noMatchBody(describeView(view))}
       </p>
       <button type="button" onClick={onClear} className={`${OUTLINE_BUTTON} self-start`}>
@@ -288,7 +288,7 @@ function EmptyLog({ view }: { view: AuditView }) {
   return (
     <div className={CARD}>
       <h2 className="text-[17px] font-semibold">{P.emptyTitle}</h2>
-      <p className="text-[13.5px] leading-relaxed text-[#c9d3df]">
+      <p className="text-[13.5px] leading-relaxed text-console-body">
         {P.emptyBody(S.admin.range[view.range])}
       </p>
     </div>
@@ -302,7 +302,7 @@ function Forbidden() {
       <h1 className="text-[17px] font-semibold">{S.admin.reason.forbidden}</h1>
       <Link
         to="/queue"
-        className="self-start text-sm text-[#7fb0ff] underline underline-offset-2 hover:text-[#a9cbff] focus-visible:outline-2 focus-visible:outline-text"
+        className="self-start text-sm text-console-link underline underline-offset-2 hover:text-console-link-hover focus-visible:outline-2 focus-visible:outline-text"
       >
         {P.forbiddenBack}
       </Link>
@@ -329,8 +329,8 @@ function QueryFailure({
         role="alert"
         className={`rounded-lg border px-3.5 py-3 text-[13.5px] leading-snug ${
           slow
-            ? "border-[#5a3a14] bg-[#2a1a0a] text-[#fcd9a8]"
-            : "border-[#5a2e36] bg-[#2a1016] text-[#fda4af]"
+            ? "border-console-warning-outline bg-high-bg text-console-warning-text"
+            : "border-console-danger-outline bg-critical-bg text-console-danger-text"
         }`}
       >
         {adminReasonText({ reason: kind })}
@@ -447,7 +447,7 @@ export function AuditPage() {
   const pager = (
     <nav
       aria-label={P.pager}
-      className="flex items-center gap-3 border-t border-[#1f2833] px-4 py-2.5 text-[13px] text-[#aeb9c6]"
+      className="flex items-center gap-3 border-t border-console-divider px-4 py-2.5 text-[13px] text-console-secondary"
     >
       {/* Polite, so a screen reader hears the new range when a page has been read. */}
       <span aria-live="polite" className="grow">
@@ -490,7 +490,7 @@ export function AuditPage() {
         failure = (
           <div
             role="alert"
-            className="rounded-lg border border-[#5a2e36] bg-[#2a1016] px-3.5 py-3 text-[13.5px] leading-snug text-[#fda4af]"
+            className="rounded-lg border border-console-danger-outline bg-critical-bg px-3.5 py-3 text-[13.5px] leading-snug text-console-danger-text"
           >
             {P.badFilter}
           </div>
@@ -499,7 +499,7 @@ export function AuditPage() {
         failure = (
           <div className="space-y-3">
             <PageError title={S.admin.common.loadError} onRetry={() => void query.refetch()} />
-            <p className="text-[13.5px] leading-relaxed text-[#c9d3df]">
+            <p className="text-[13.5px] leading-relaxed text-console-body">
               {loadHint(fault.kind === "load" ? fault.status : 0)}
             </p>
           </div>
@@ -540,7 +540,7 @@ export function AuditPage() {
     <div className="flex flex-col gap-[18px]">
       <div className="flex flex-col gap-1">
         {!failed && <h1 className="text-[26px] font-semibold">{S.admin.title.audit}</h1>}
-        {!failed && <span className="text-sm text-[#aeb9c6]">{P.subtitle}</span>}
+        {!failed && <span className="text-sm text-console-secondary">{P.subtitle}</span>}
       </div>
       <FilterForm
         view={view}
@@ -551,7 +551,7 @@ export function AuditPage() {
       {data !== undefined && query.isRefetchError && (
         <div
           role="alert"
-          className="flex items-center gap-3 rounded-lg border border-[#5a3a14] bg-[#2a1a0a] px-3.5 py-2.5 text-[13.5px] text-[#fcd9a8]"
+          className="flex items-center gap-3 rounded-lg border border-console-warning-outline bg-high-bg px-3.5 py-2.5 text-[13.5px] text-console-warning-text"
         >
           <span className="grow">{P.refreshFailed}</span>
           <button type="button" onClick={() => void query.refetch()} className={OUTLINE_BUTTON}>

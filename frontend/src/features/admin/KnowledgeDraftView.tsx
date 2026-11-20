@@ -834,7 +834,7 @@ function RightColumn({
       {notice !== null && (
         <p
           role="alert"
-          className={`${PANEL} border-[#5a3a14] bg-[#2a1a0a] px-3.5 py-3 text-[13.5px] text-[#fcd9a8]`}
+          className={`${PANEL} border-console-warning-outline bg-high-bg px-3.5 py-3 text-[13.5px] text-console-warning-text`}
         >
           {notice}
         </p>
@@ -842,9 +842,9 @@ function RightColumn({
       {faults.length > 0 && (
         <div
           role="alert"
-          className="space-y-1 rounded-lg border border-[#5a2e36] bg-[#2a1016] px-3.5 py-3"
+          className="space-y-1 rounded-lg border border-console-danger-outline bg-critical-bg px-3.5 py-3"
         >
-          <p className="text-[13.5px] font-semibold text-[#fda4af]">
+          <p className="text-[13.5px] font-semibold text-console-danger-text">
             {K.notice.faults(faults.length)}
           </p>
           {places.general.length > 0 && (
@@ -1100,12 +1100,12 @@ function Warnings({ warnings }: { warnings: readonly string[] }) {
   return (
     <section
       aria-labelledby={id}
-      className="space-y-1 rounded-lg border border-[#5a3a14] bg-[#2a1a0a] px-3.5 py-3"
+      className="space-y-1 rounded-lg border border-console-warning-outline bg-high-bg px-3.5 py-3"
     >
-      <h3 id={id} className="text-sm font-semibold text-[#fcd9a8]">
+      <h3 id={id} className="text-sm font-semibold text-console-warning-text">
         {D.right.warnings}
       </h3>
-      <ul className="list-disc pl-5 text-[13px] text-[#fcd9a8]">
+      <ul className="list-disc pl-5 text-[13px] text-console-warning-text">
         {warnings.map((code, index) => (
           <li key={index}>{knowledgeWarningText(code)}</li>
         ))}

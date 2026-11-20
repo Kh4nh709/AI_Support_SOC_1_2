@@ -57,7 +57,7 @@ export function ResultTiles({ run }: { run: RunView }) {
   const rag = ragTile(run);
   const evidence = evidenceTile(run);
   return (
-    <div className="grid grid-cols-4 gap-2">
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
       <VerdictTile run={run} />
       <ScoreTile label={S.ai2.tile.confidence} tone="ai">
         <ConfidenceMeter level={confidence.level} word={confidence.word} />

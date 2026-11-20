@@ -21,6 +21,7 @@ const WRAP = "max-w-56 wrap-anywhere";
 export type OpenDetail = (id: string, opener: HTMLElement) => void;
 
 export function reviewColumns(parts: {
+  detailId: string | null;
   states: Readonly<Record<string, RowState>>;
   me: string | null;
   focus: { id: string } | null;
@@ -35,6 +36,8 @@ export function reviewColumns(parts: {
       cell: (row) => (
         <button
           type="button"
+          data-soar-open=""
+          aria-expanded={parts.detailId === row.id}
           aria-label={S.soar.detail.open(row.id)}
           onClick={(event: MouseEvent<HTMLButtonElement>) =>
             parts.onOpen(row.id, event.currentTarget)
@@ -139,6 +142,7 @@ export const severityWordClass = (severity: unknown): string =>
     : "text-muted";
 
 export function noticeColumns(parts: {
+  detailId: string | null;
   dismissed: ReadonlySet<string>;
   onDismiss: (id: string) => void;
   onOpen: OpenDetail;
@@ -167,6 +171,8 @@ export function noticeColumns(parts: {
       cell: (row) => (
         <button
           type="button"
+          data-soar-open=""
+          aria-expanded={parts.detailId === row.id}
           onClick={(event: MouseEvent<HTMLButtonElement>) =>
             parts.onOpen(row.id, event.currentTarget)
           }

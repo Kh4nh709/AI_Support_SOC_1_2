@@ -211,7 +211,7 @@ function EntryScreen({
         {notice !== null && (
           <p
             role="alert"
-            className="rounded-lg border border-[#5a3a14] bg-[#2a1a0a] px-3.5 py-3 text-[13.5px] text-[#fcd9a8]"
+            className="rounded-lg border border-console-warning-outline bg-high-bg px-3.5 py-3 text-[13.5px] text-console-warning-text"
           >
             {notice}
           </p>
@@ -270,7 +270,7 @@ function Integrity({ entry }: { entry: KnowledgeEntry }) {
         {E.integrity.heading}
       </h3>
       {contentOk && fileOk ? (
-        <p className="text-sm text-[#9ff0c5]">{E.integrity.ok}</p>
+        <p className="text-sm text-console-success-text">{E.integrity.ok}</p>
       ) : (
         <ul className="list-disc pl-5">
           {!contentOk && <li className={ERROR_CLASS}>{E.integrity.contentBad}</li>}

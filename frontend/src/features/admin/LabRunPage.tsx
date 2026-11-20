@@ -45,7 +45,7 @@ function Skeleton() {
     >
       <span className="sr-only">{S.common.loading}</span>
       {["a", "b", "c"].map((key) => (
-        <div key={key} className="h-16 animate-pulse rounded-md bg-[#1c2530]" />
+        <div key={key} className="h-16 animate-pulse rounded-md bg-console-active" />
       ))}
     </div>
   );
@@ -55,7 +55,7 @@ function BackLink({ children }: { children: string }) {
   return (
     <Link
       to="/admin/lab"
-      className={`text-sm text-[#aeb9c6] underline underline-offset-2 hover:text-text ${FOCUS}`}
+      className={`text-sm text-console-secondary underline underline-offset-2 hover:text-text ${FOCUS}`}
     >
       {children}
     </Link>
@@ -143,8 +143,8 @@ export function LabRunPage() {
           {run?.name ?? S.admin.lab.title.run}
         </h1>
         {run !== null && (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-[#aeb9c6]">
-            <span className="rounded bg-[#1c2530] px-2 py-0.5 text-xs font-semibold text-text">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-console-secondary">
+            <span className="rounded bg-console-active px-2 py-0.5 text-xs font-semibold text-text">
               {labelOf(S.admin.lab.purpose, run.purpose)}
             </span>
             <span>
@@ -156,7 +156,7 @@ export function LabRunPage() {
             </p>
           </div>
         )}
-        <p className="max-w-3xl text-sm text-[#aeb9c6]">{R.subtitle}</p>
+        <p className="max-w-3xl text-sm text-console-secondary">{R.subtitle}</p>
       </div>
 
       {run === null ? (
@@ -188,13 +188,13 @@ export function LabRunPage() {
                   refocus.current = true;
                   void query.fetchNextPage({ cancelRefetch: false });
                 }}
-                className={`h-[34px] rounded-md border border-[#2e3a48] px-3 text-[13px] text-[#c9d3df] hover:bg-ground disabled:cursor-wait disabled:opacity-60 ${FOCUS}`}
+                className={`h-[34px] rounded-md border border-console-outline px-3 text-[13px] text-console-body hover:bg-ground disabled:cursor-wait disabled:opacity-60 ${FOCUS}`}
               >
                 {fetching ? R.loadingMore : R.loadMore}
               </button>
             )}
             {query.isFetchNextPageError && (
-              <p role="alert" className="text-[13px] text-[#fda4af]">
+              <p role="alert" className="text-[13px] text-console-danger-text">
                 {R.loadMoreFailed}
               </p>
             )}

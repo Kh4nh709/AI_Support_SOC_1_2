@@ -83,8 +83,8 @@ describe("the rows", () => {
   it("heads the table with the seven columns of the Jinja page", async () => {
     serve([row(1)]);
     renderList();
-    await table();
-    const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    const records = within(await table());
+    const heads = records.getAllByRole("columnheader").map((h) => h.textContent);
     expect(heads).toEqual([
       S.case.col.title,
       S.case.col.status,
@@ -99,8 +99,8 @@ describe("the rows", () => {
   it("keeps the order the server sent: investigating first, then newest first", async () => {
     serve([row(3), row(2, { status: "concluded_fp" }), row(1, { status: "confirmed_incident" })]);
     renderList();
-    await table();
-    const links = screen.getAllByRole("link").map((a) => a.textContent);
+    const records = within(await table());
+    const links = records.getAllByRole("link").map((a) => a.textContent);
     expect(links).toEqual([
       "Brute force vào máy chủ 3",
       "Brute force vào máy chủ 2",
@@ -115,29 +115,29 @@ describe("the rows", () => {
       row(3, { status: "confirmed_incident" }),
     ]);
     renderList();
-    await table();
-    expect(screen.getByText("Dương tính giả")).toBeInTheDocument();
-    expect(screen.getByText("Vi phạm chính sách")).toBeInTheDocument();
-    expect(screen.getByText("Xác nhận sự cố")).toBeInTheDocument();
+    const records = within(await table());
+    expect(records.getByText("Dương tính giả")).toBeInTheDocument();
+    expect(records.getByText("Vi phạm chính sách")).toBeInTheDocument();
+    expect(records.getByText("Xác nhận sự cố")).toBeInTheDocument();
   });
 
   it("labels an archived case 'Đã lưu trữ' - closed by the archive, not concluded by anyone (DEC-212)", async () => {
     serve([row(2), row(1, { status: "archived", last_analyzed_at: null, last_run: null })]);
     renderList();
-    await table();
-    const archivedRow = screen.getByText("Brute force vào máy chủ 1").closest("tr") as HTMLElement;
+    const records = within(await table());
+    const archivedRow = records.getByText("Brute force vào máy chủ 1").closest("tr") as HTMLElement;
     expect(within(archivedRow).getByText("Đã lưu trữ")).toBeInTheDocument();
     expect(within(archivedRow).queryByText("Đang điều tra")).not.toBeInTheDocument();
-    const openRow = screen.getByText("Brute force vào máy chủ 2").closest("tr") as HTMLElement;
+    const openRow = records.getByText("Brute force vào máy chủ 2").closest("tr") as HTMLElement;
     expect(within(openRow).getByText("Đang điều tra")).toBeInTheDocument();
-    expect(screen.queryByText("Dương tính giả")).not.toBeInTheDocument();
+    expect(records.queryByText("Dương tính giả")).not.toBeInTheDocument();
   });
 
   it("says a case never analysed is so, not a blank or a dash", async () => {
     serve([row(1, { last_analyzed_at: null, last_run: null })]);
     renderList();
-    await table();
-    expect(screen.getByText(S.case.neverAnalysed)).toBeInTheDocument();
+    const records = within(await table());
+    expect(records.getByText(S.case.neverAnalysed)).toBeInTheDocument();
   });
 
   // INT-T02 fix round 1 (N4): "Phân tích gần nhất" follows the newest ② run here as on the case page,
@@ -151,9 +151,9 @@ describe("the rows", () => {
         }),
       ]);
       renderList();
-      await table();
-      expect(screen.getByText("30/09 08:19 — không có kết quả")).toBeInTheDocument();
-      expect(screen.queryByText(S.case.neverAnalysed)).not.toBeInTheDocument();
+      const records = within(await table());
+      expect(records.getByText("30/09 08:19 — không có kết quả")).toBeInTheDocument();
+      expect(records.queryByText(S.case.neverAnalysed)).not.toBeInTheDocument();
     });
 
     it("shows the time alone for a run with a result, and the newest run over an older good one", async () => {
@@ -165,10 +165,10 @@ describe("the rows", () => {
         }),
       ]);
       renderList();
-      await table();
-      expect(screen.getByText("30/09 08:19")).toBeInTheDocument();
-      expect(screen.getByText("30/09 10:30 — không có kết quả")).toBeInTheDocument();
-      expect(screen.queryByText("29/09 08:19")).not.toBeInTheDocument();
+      const records = within(await table());
+      expect(records.getByText("30/09 08:19")).toBeInTheDocument();
+      expect(records.getByText("30/09 10:30 — không có kết quả")).toBeInTheDocument();
+      expect(records.queryByText("29/09 08:19")).not.toBeInTheDocument();
     });
 
     it("reads an answer with no last_run as last_analyzed_at was read", async () => {
@@ -176,9 +176,9 @@ describe("the rows", () => {
       delete (old as Record<string, unknown>).last_run;
       serve([old, row(2, { last_analyzed_at: null, last_run: undefined })]);
       renderList();
-      await table();
-      expect(screen.getByText("30/09 08:19")).toBeInTheDocument();
-      expect(screen.getByText(S.case.neverAnalysed)).toBeInTheDocument();
+      const records = within(await table());
+      expect(records.getByText("30/09 08:19")).toBeInTheDocument();
+      expect(records.getByText(S.case.neverAnalysed)).toBeInTheDocument();
     });
   });
 
@@ -188,20 +188,20 @@ describe("the rows", () => {
       row(2, { status: "constructor", severity: null }),
     ]);
     renderList();
-    await table();
-    expect(screen.getByText("reopened_by_magic")).toBeInTheDocument();
-    expect(screen.getByText("catastrophic")).toBeInTheDocument();
-    expect(screen.getByText("constructor")).toBeInTheDocument();
-    expect(screen.getAllByText(S.common.missing).length).toBeGreaterThan(0);
+    const records = within(await table());
+    expect(records.getByText("reopened_by_magic")).toBeInTheDocument();
+    expect(records.getByText("catastrophic")).toBeInTheDocument();
+    expect(records.getByText("constructor")).toBeInTheDocument();
+    expect(records.getAllByText(S.common.missing).length).toBeGreaterThan(0);
   });
 
   it("renders a title as text, never as markup", async () => {
     const markup = '<img src=x onerror="alert(1)"><b>đậm</b>';
     serve([row(1, { title: markup })]);
     const { container } = renderList();
-    await table();
+    const records = within(await table());
     expect(container.querySelector("img, b")).toBeNull();
-    expect(screen.getByRole("link", { name: markup })).toBeInTheDocument();
+    expect(records.getByRole("link", { name: markup })).toBeInTheDocument();
   });
 });
 
@@ -395,4 +395,19 @@ describe("accessibility", () => {
       result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target).join(" ")}`),
     ).toEqual([]);
   });
+});
+
+it("previews the selected case and preserves its full-detail destination", async () => {
+  const second = row(2, { last_analyzed_at: null, last_run: null });
+  serve([row(1), second]);
+  renderList();
+  await userEvent
+    .setup()
+    .click(await screen.findByRole("button", { name: "Xem nhanh: Brute force vào máy chủ 2" }));
+  const preview = within(screen.getByRole("region", { name: "Xem nhanh" }));
+  expect(preview.getByText(S.case.neverAnalysed)).toBeVisible();
+  expect(preview.getByRole("link", { name: "Mở case" })).toHaveAttribute(
+    "href",
+    "/cases/" + second.case_id,
+  );
 });

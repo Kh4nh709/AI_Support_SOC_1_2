@@ -1,5 +1,5 @@
-// `/cases/:caseId` (spec §4, the `Case` artboard): what is known of one case on the left (its heads,
-// what happened when, the notes, the conclusion) and the ② analysis on the right. TanStack Query owns the
+// `/cases/:caseId` presents the case evidence, the ② analysis, and the analyst notes and conclusion in tabs.
+// TanStack Query owns the
 // reads (`["case", caseId]`) and the writes: a note or a conclusion makes the case and the case list stale,
 // and a conclusion answers with the case itself, so it is shown as it comes and read again behind it.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -21,6 +21,7 @@ import {
 import { ApiError } from "../../api/client";
 import { formatDateTime, formatTime } from "../../format";
 import { S, labelOf } from "../../strings";
+import { Tabs } from "../analysis/Tabs";
 import { caseLineOf } from "./caseLine";
 import { InvestigationColumn } from "./InvestigationColumn";
 import { lastAnalysedText } from "./lastAnalysed";
@@ -34,7 +35,11 @@ export function CasePage() {
   const { caseId } = useParams();
   if (caseId === undefined) return <ErrorNotice message={S.case.notFound} />;
   // Another case is another page: nothing typed or opened for the last one is carried over.
-  return <CaseView key={caseId} caseId={caseId} />;
+  return (
+    <div className="soc-workspace min-w-0">
+      <CaseView key={caseId} caseId={caseId} />
+    </div>
+  );
 }
 
 function CaseView({ caseId }: { caseId: string }) {
@@ -53,31 +58,75 @@ function CaseView({ caseId }: { caseId: string }) {
 
   const open = data.status === OPEN_CASE_STATUS;
   return (
-    <div className="space-y-4">
-      <h1 className="text-lg font-semibold">{asText(data.title)}</h1>
-
-      {/* A read made again after the first one failed: the case on screen is the last one that loaded. */}
-      {error !== null && <ReadFailed error={error} reload={reload} />}
-
-      <div className="flex items-start gap-6">
-        <div className="min-w-0 flex-1 space-y-6">
-          <h2 className="text-sm font-semibold tracking-wide text-ai-accent">
-            {S.case.infoHeading}
-          </h2>
-          <Summary data={data} />
-          <Heads data={data} />
-          <Timeline data={data} />
-          <Notes caseId={caseId} data={data} open={open} />
-          <Conclusion caseId={caseId} data={data} open={open} />
-        </div>
-        <InvestigationColumn
-          key={caseId}
-          caseId={caseId}
-          caseOpen={open}
-          caseLine={caseLineOf(data)}
-        />
-      </div>
-    </div>
+    <Tabs
+      label={S.workspace.sections}
+      keepMounted
+      header={{
+        before: (
+          <Link
+            to="/cases"
+            className="text-sm text-muted underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-text"
+          >
+            {S.case.listTitle}
+          </Link>
+        ),
+        title: (
+          <h1 className="min-w-0 text-2xl font-semibold tracking-tight [overflow-wrap:anywhere] sm:text-3xl">
+            {asText(data.title)}
+          </h1>
+        ),
+        action: { tab: "decision", label: S.workspace.caseDecision },
+        after: (
+          <>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+              <span data-severity={data.severity} className="soc-severity">
+                {labelOf(S.severity, data.severity)}
+              </span>
+              <span>{labelOf(S.caseStatus, data.status)}</span>
+            </div>
+            {error !== null && <ReadFailed error={error} reload={reload} />}
+          </>
+        ),
+      }}
+      tabs={[
+        {
+          id: "evidence",
+          label: S.workspace.evidence,
+          content: (
+            <div className="min-w-0 space-y-6">
+              <h2 className="text-sm font-semibold tracking-wide text-ai-accent">
+                {S.case.infoHeading}
+              </h2>
+              <Summary data={data} />
+              <Heads data={data} />
+              <Timeline data={data} />
+            </div>
+          ),
+        },
+        {
+          id: "analysis",
+          label: S.workspace.analysis,
+          content: (
+            <InvestigationColumn
+              key={caseId}
+              caseId={caseId}
+              caseOpen={open}
+              caseLine={caseLineOf(data)}
+            />
+          ),
+        },
+        {
+          id: "decision",
+          label: S.workspace.caseDecision,
+          content: (
+            <div className="space-y-6">
+              <Notes caseId={caseId} data={data} open={open} />
+              <Conclusion caseId={caseId} data={data} open={open} />
+            </div>
+          ),
+        },
+      ]}
+    />
   );
 }
 
@@ -317,9 +366,9 @@ function Notes({ caseId, data, open }: { caseId: string; data: CaseDetail; open:
 
   return (
     <section aria-labelledby={titleId} className="space-y-2">
-      <h3 id={titleId} className={HEADING}>
+      <h2 id={titleId} className={HEADING}>
         {S.case.notes}
-      </h3>
+      </h2>
       {data.notes.length === 0 ? (
         <p className="text-sm">{S.case.noNotes}</p>
       ) : (
@@ -435,9 +484,9 @@ function Conclusion({ caseId, data, open }: { caseId: string; data: CaseDetail; 
 
   return (
     <section aria-labelledby={titleId} className={`${PANEL} space-y-3`}>
-      <h3 id={titleId} className={HEADING}>
+      <h2 id={titleId} className={HEADING}>
         {S.case.conclusionHeading}
-      </h3>
+      </h2>
 
       {conflict !== null && (
         <p role="alert" className={ERROR_TEXT}>

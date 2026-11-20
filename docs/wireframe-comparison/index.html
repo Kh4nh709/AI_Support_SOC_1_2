@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Đối chiếu 15 màn wireframe</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0 auto; max-width: 1920px; padding: clamp(16px,3vw,40px); background: #0d1117; color: #e6ebf1; font: 16px/1.5 system-ui,sans-serif; }
+h1,h2 { line-height: 1.25; } h2 { margin-bottom: .25rem; } p { max-width: 88ch; }
+section { margin-top: 2rem; border-top: 1px solid #344050; } figure { margin: 0; min-width: 0; }
+.pair { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+img { display: block; width: 100%; height: auto; border: 1px solid #344050; border-radius: 6px; }
+figcaption { margin: .5rem 0; color: #bdc7d4; } a { color: #c3acff; }
+@media (max-width: 700px) { .pair { grid-template-columns: 1fr; } }
+</style></head>
+<body><main>
+<h1>Đối chiếu 15 màn wireframe</h1>
+<p>Hai bản đều được chụp ở 1440 × 1000 px, giao diện tối, bật màu và có dữ liệu. Phản hồi SOAR dùng bố cục B. Threat Intel dùng A. Các màn có lựa chọn còn lại dùng B. Hai bản dùng dữ liệu mẫu riêng. Bấm vào ảnh để xem nguyên kích thước.</p>
+<p>Trong wireframe, 15 màn đã được kiểm tra thêm ở 375 px. Mã băm dài được rút gọn trong danh sách IOC. Khung chi tiết hiển thị đủ mã và cho sao chép giá trị gốc.</p>
+<section id="queue"><h2>Hàng đợi Tier 1</h2><p>Khung xem nhanh và màu dòng chọn đã gần bản gốc. Bộ đếm theo mức, bộ lọc và bộ sắp xếp làm phần đầu trang cao hơn.</p><div class="pair">
+<figure><figcaption>Thiết kế gốc</figcaption><a href="queue-ref.jpg"><img loading="lazy" src="queue-ref.jpg" width="1440" height="1000" alt="Hàng đợi Tier 1, thiết kế gốc"></a></figure>
+<figure><figcaption>Wireframe đã sửa</figcaption><a href="queue-current.jpg"><img loading="lazy" src="queue-current.jpg" width="1440" height="1000" alt="Hàng đợi Tier 1, wireframe đã sửa"></a></figure>
+</div></section>
+<section id="alert"><h2>Chi tiết alert</h2><p>Ở màn rộng, mỗi cột Bằng chứng xếp panel sát nhau theo chiều cao nội dung. Wireframe còn có ngữ cảnh SOAR, làm giàu và tương quan.</p><div class="pair">
+<figure><figcaption>Thiết kế gốc</figcaption><a href="alert-ref.jpg"><img loading="lazy" src="alert-ref.jpg" width="1440" height="1000" alt="Chi tiết alert, thiết kế gốc"></a></figure>
+<figure><figcaption>Wireframe đã sửa</figcaption><a href="alert-current.jpg"><img loading="lazy" src="alert-current.jpg" width="1440" height="1000" alt="Chi tiết alert, wireframe đã sửa"></a></figure>
+</div></section>
+<section id="cases"><h2>Danh sách case</h2><p>Bấm vào thẻ để mở khung xem nhanh và tô sáng case đang chọn. Thẻ hiển thị trạng thái điều tra của mẫu.</p><div class="pair">
+<figure><figcaption>Thiết kế gốc</figcaption><a href="cases-ref.jpg"><img loading="lazy" src="cases-ref.jpg" width="1440" height="1000" alt="Danh sách case, thiết kế gốc"></a></figure>
+<figure><figcaption>Wireframe đã sửa</figcaption><a href="cases-current.jpg"><img loading="lazy" src="cases-current.jpg" width="1440" height="1000" alt="Danh sách case, wireframe đã sửa"></a></figure>
+</div></section>
+<section id="case"><h2>Chi tiết case</h2><p>Thông tin case và diễn biến nằm cạnh nhau. Bảng cụm cảnh báo có nút mở log nên chiếm nhiều chiều cao hơn danh sách liên kết của bản gốc.</p><div class="pair">
+<figure><figcaption>Thiết kế gốc</figcaption><a href="case-ref.jpg"><img loading="lazy" src="case-ref.jpg" width="1440" height="1000" alt="Chi tiết case, thiết kế gốc"></a></figure>
+<figure><figcaption>Wireframe đã sửa</figcaption><a href="case-current.jpg"><img loading="lazy" src="case-current.jpg" width="1440" height="1000" alt="Chi tiết case, wireframe đã sửa"></a></figure>
+</div></section>
+<section id="soar"><h2>Phản hồi SOAR</h2><p>Bố cục B trình bày từng phiếu thành thẻ và mở khung chi tiết khi chọn mã phiếu. Các nút hiển thị một nhãn thao tác.</p><div class="pair">
+<figure><figcaption>Thiết kế gốc</figcaption><a href="soar-ref.jpg"><img loading="lazy" src="soar-ref.jpg" width="1440" height="1000" alt="Phản hồi SOAR, thiết kế gốc"></a></figure>
+<figure><figcaption>Wireframe đã sửa</figcaption><a href="soar-current.jpg"><img loading="lazy" src="soar-current.jpg" width="1440" height="1000" alt="Phản hồi SOAR, wireframe đã sửa"></a></figure>
+</div></section>
+<section id="ti"><h2>Threat Intel</h2><p>Bố cục A đặt tình trạng nhập dữ liệu, chỉ số và biểu đồ trước bảng IOC. Wireframe vẫn có đầy đủ bộ lọc và chi tiết khi chọn IOC.</p><div class="pair">
+<figure><figcaption>Thiết kế gốc</figcaption><a href="ti-ref.jpg"><img loading="lazy" src="ti-ref.jpg" width="1440" height="1000" alt="Threat Intel, thiết kế gốc"></a></figure>
+<figure><figcaption>Wireframe đã sửa</figcaption><a href="ti-current.jpg"><img loading="lazy" src="ti-current.jpg" width="1440" height="1000" alt="Threat Intel, wireframe đã sửa"></a></figure>
+</div></section>
+<section id="admin-overview"><h2>Tổng quan hệ thống</h2><p>Thẻ chỉ số, biểu đồ và phễu trạng thái chiếm nhiều diện tích hơn nhóm panel tóm tắt của bản gốc.</p><div class="pair">
+<figure><figcaption>Thiết kế gốc</figcaption><a href="admin-overview-ref.jpg"><img loading="lazy" src="admin-overview-ref.jpg" width="1440" height="1000" alt="Tổng quan hệ thống, thiết kế gốc"></a></figure>
+<figure><figcaption>Wireframe đã sửa</figcaption><a href="admin-overview-current.jpg"><img loading="lazy" src="admin-overview-current.jpg" width="1440" height="1000" alt="Tổng quan hệ thống, wireframe đã sửa"></a></figure>
+</div></section>
+<section id="admin-users"><h2>Người dùng và quyền</h2><p>Form tạo tài khoản nằm cạnh bảng. Bảng quyền và điều khiển từng tài khoản làm trang dài hơn.</p><div class="pair">
+<figure><figcaption>Thiết kế gốc</figcaption><a href="admin-users-ref.jpg"><img loading="lazy" src="admin-users-ref.jpg" width="1440" height="1000" alt="Người dùng và quyền, thiết kế gốc"></a></figure>
+<figure><figcaption>Wireframe đã sửa</figcaption><a href="admin-users-current.jpg"><img loading="lazy" src="admin-users-current.jpg" width="1440" height="1000" alt="Người dùng và quyền, wireframe đã sửa"></a></figure>
+</div></section>
+<section id="admin-llm"><h2>LLM và hạn mức</h2><p>Form sửa hạn mức nằm cạnh bảng pipeline. Các thẻ chi phí và lượt gọi tạo thêm một hàng so với bản gốc.</p><div class="pair">
+<figure><figcaption>Thiết kế gốc</figcaption><a href="admin-llm-ref.jpg"><img loading="lazy" src="admin-llm-ref.jpg" width="1440" height="1000" alt="LLM và hạn mức, thiết kế gốc"></a></figure>
+<figure><figcaption>Wireframe đã sửa</figcaption><a href="admin-llm-current.jpg"><img loading="lazy" src="admin-llm-current.jpg" width="1440" height="1000" alt="LLM và hạn mức, wireframe đã sửa"></a></figure>
+</div></section>
+<section id="admin-labels"><h2>Gán nhãn tập vàng</h2><p>Bằng chứng, log và bảng tương quan chiếm cột trái. Bản gốc dùng cột này cho danh sách mẫu.</p><div class="pair">
+<figure><figcaption>Thiết kế gốc</figcaption><a href="admin-labels-ref.jpg"><img loading="lazy" src="admin-labels-ref.jpg" width="1440" height="1000" alt="Gán nhãn tập vàng, thiết kế gốc"></a></figure>
+<figure><figcaption>Wireframe đã sửa</figcaption><a href="admin-labels-current.jpg"><img loading="lazy" src="admin-labels-current.jpg" width="1440" height="1000" alt="Gán nhãn tập vàng, wireframe đã sửa"></a></figure>
+</div></section>
+<section id="admin-lab"><h2>Gán nhãn lab</h2><p>Bảng các lần chạy hẹp hơn vì có form tạo lần chạy bên cạnh.</p><div class="pair">
+<figure><figcaption>Thiết kế gốc</figcaption><a href="admin-lab-ref.jpg"><img loading="lazy" src="admin-lab-ref.jpg" width="1440" height="1000" alt="Gán nhãn lab, thiết kế gốc"></a></figure>
+<figure><figcaption>Wireframe đã sửa</figcaption><a href="admin-lab-current.jpg"><img loading="lazy" src="admin-lab-current.jpg" width="1440" height="1000" alt="Gán nhãn lab, wireframe đã sửa"></a></figure>
+</div></section>
+<section id="admin-lab-run"><h2>Lần chạy lab</h2><p>Mỗi alert có thẻ riêng, nhãn và thao tác tại chỗ. Bản gốc đưa alert vào một bảng tóm tắt.</p><div class="pair">
+<figure><figcaption>Thiết kế gốc</figcaption><a href="admin-lab-run-ref.jpg"><img loading="lazy" src="admin-lab-run-ref.jpg" width="1440" height="1000" alt="Lần chạy lab, thiết kế gốc"></a></figure>
+<figure><figcaption>Wireframe đã sửa</figcaption><a href="admin-lab-run-current.jpg"><img loading="lazy" src="admin-lab-run-current.jpg" width="1440" height="1000" alt="Lần chạy lab, wireframe đã sửa"></a></figure>
+</div></section>
+<section id="admin-knowledge"><h2>Tri thức học được</h2><p>Năm tab và bảng bản nháp hiện trước. Khung đối chiếu nguồn mở sau khi chọn một mục, trong khi bản gốc mở sẵn.</p><div class="pair">
+<figure><figcaption>Thiết kế gốc</figcaption><a href="admin-knowledge-ref.jpg"><img loading="lazy" src="admin-knowledge-ref.jpg" width="1440" height="1000" alt="Tri thức học được, thiết kế gốc"></a></figure>
+<figure><figcaption>Wireframe đã sửa</figcaption><a href="admin-knowledge-current.jpg"><img loading="lazy" src="admin-knowledge-current.jpg" width="1440" height="1000" alt="Tri thức học được, wireframe đã sửa"></a></figure>
+</div></section>
+<section id="admin-audit"><h2>Nhật ký audit</h2><p>Nhiều bộ lọc, mã đối tượng và hàng mở payload khiến bảng dày hơn mẫu ba cột.</p><div class="pair">
+<figure><figcaption>Thiết kế gốc</figcaption><a href="admin-audit-ref.jpg"><img loading="lazy" src="admin-audit-ref.jpg" width="1440" height="1000" alt="Nhật ký audit, thiết kế gốc"></a></figure>
+<figure><figcaption>Wireframe đã sửa</figcaption><a href="admin-audit-current.jpg"><img loading="lazy" src="admin-audit-current.jpg" width="1440" height="1000" alt="Nhật ký audit, wireframe đã sửa"></a></figure>
+</div></section>
+<section id="login"><h2>Đăng nhập</h2><p>Form một cột đã gần bản gốc. Wireframe có focus ban đầu ở tên đăng nhập và đặt form thấp hơn.</p><div class="pair">
+<figure><figcaption>Thiết kế gốc</figcaption><a href="login-ref.jpg"><img loading="lazy" src="login-ref.jpg" width="1440" height="1000" alt="Đăng nhập, thiết kế gốc"></a></figure>
+<figure><figcaption>Wireframe đã sửa</figcaption><a href="login-current.jpg"><img loading="lazy" src="login-current.jpg" width="1440" height="1000" alt="Đăng nhập, wireframe đã sửa"></a></figure>
+</div></section>
+</main></body></html>

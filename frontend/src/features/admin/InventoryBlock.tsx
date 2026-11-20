@@ -103,7 +103,7 @@ export function InventoryBlock({
         {result?.kind === "loaded" && (
           <div
             role="status"
-            className="flex flex-col gap-2 rounded-lg border border-[#2e5a44] bg-[#102a20] px-3.5 py-3 text-[13.5px] text-[#9ff0c5]"
+            className="flex flex-col gap-2 rounded-lg border border-console-success-outline bg-console-success-tint px-3.5 py-3 text-[13.5px] text-console-success-text"
           >
             <div className="flex items-start gap-3">
               <p className="grow">
@@ -118,10 +118,10 @@ export function InventoryBlock({
             </div>
             {result.report.warnings.length > 0 && (
               <>
-                <p className="text-[13px] text-[#aeb9c6]">
+                <p className="text-[13px] text-console-secondary">
                   {I.warnings(result.report.warnings.length)}
                 </p>
-                <ul className={`${MONO_LIST} text-[#fcd9a8]`}>
+                <ul className={`${MONO_LIST} text-console-warning-text`}>
                   {result.report.warnings.map((warning, i) => (
                     <li key={`${i}:${warning}`}>{withoutPrefix(warning)}</li>
                   ))}
@@ -133,7 +133,7 @@ export function InventoryBlock({
         {result?.kind === "refused" && (
           <div
             role="alert"
-            className="flex flex-col gap-2 rounded-lg border border-[#5a2e36] bg-[#2a1016] px-3.5 py-3 text-[13px] leading-snug text-[#fda4af]"
+            className="flex flex-col gap-2 rounded-lg border border-console-danger-outline bg-critical-bg px-3.5 py-3 text-[13px] leading-snug text-console-danger-text"
           >
             <div className="flex items-start gap-3">
               <p className="grow">{I.refused}</p>
@@ -153,7 +153,7 @@ export function InventoryBlock({
             setDialogError(null);
             setOpen(true);
           }}
-          className="mt-auto h-11 rounded-lg border border-[#2e3a48] text-sm font-semibold hover:bg-ground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-text"
+          className="mt-auto h-11 rounded-lg border border-console-outline text-sm font-semibold hover:bg-ground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-text"
         >
           {I.reload}
         </button>
@@ -190,7 +190,7 @@ export function InventoryBlock({
 function Line({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex justify-between gap-2.5">
-      <dt className="text-[#aeb9c6]">{label}</dt>
+      <dt className="text-console-secondary">{label}</dt>
       <dd>{children}</dd>
     </div>
   );

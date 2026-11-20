@@ -7,10 +7,6 @@ import { S } from "../../strings";
 import { buttonsOf, type ShownButton } from "./model";
 import { sameStamp, stampOf, type RowState } from "./useDecisions";
 
-// Whole class names, written out: Tailwind finds a class by reading the source. A long label wraps inside its button.
-const BUTTON =
-  "max-w-56 rounded border border-border px-2 py-1 text-left text-xs wrap-anywhere hover:bg-surface disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-text";
-
 /**
  * One button of a ticket: n8n label as text, and beside it the word of the WEB for the decision ("Giữ", "Gỡ", "Dương tính
  * giả"), which is the button's accessible description and, always, a small muted tag for the eye: a label n8n wrote can say
@@ -28,8 +24,9 @@ function DecisionButton({
 }) {
   const wordId = useId();
   const word = S.soar.decision[button.decision];
+  const prefix = button.label.match(/^(?:✅|↩️?|🚫)\s+(?=\S)/u)?.[0] ?? "";
   return (
-    <span className="inline-flex max-w-full flex-wrap items-center gap-1">
+    <span className="soar-action-item">
       <button
         type="button"
         disabled={disabled}
@@ -39,9 +36,14 @@ function DecisionButton({
         onKeyDown={(event) => {
           if (event.repeat) event.preventDefault();
         }}
-        className={BUTTON}
+        className="soar-decision max-w-full wrap-anywhere"
+        data-decision={button.decision}
+        aria-label={button.label}
       >
-        {button.label}
+        <span>
+          <span className="sr-only">{prefix}</span>
+          {button.label.slice(prefix.length)}
+        </span>
       </button>
       <span id={wordId} className="text-xs text-muted">
         {word}
@@ -92,7 +94,7 @@ export function RowActions({
       className="flex min-w-0 flex-col gap-1.5 focus-visible:outline-2 focus-visible:outline-text"
     >
       {buttons.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="soar-actions">
           {buttons.map((button) => (
             <DecisionButton
               key={button.decision}

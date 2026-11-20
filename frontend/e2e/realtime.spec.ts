@@ -32,7 +32,7 @@ test("a new alert appears in the open queue within 2 s, with no reload", async (
 
   const alert = await postAlert(request, { tag: "live", arm: "visible" });
   const posted = Date.now();
-  const row = page.locator(`a[href="/alerts/${alert.id}"]`);
+  const row = page.getByRole("link", { name: alert.description, exact: true });
   await expect(row).toBeVisible({ timeout: APPEAR_WITHIN_MS });
   // For the report: how much of the budget the push used (the worker's own poll is part of it).
   console.log(

@@ -51,13 +51,13 @@ function useNow(): number {
 
 // Whole class names, written out: Tailwind finds a class by reading the source.
 const STATE_CHIP: Record<AccountState, string> = {
-  active: "bg-[#133528] text-[#9ff0c5]",
-  locked: "bg-[#3a2a12] text-[#fcd9a8]",
-  inactive: "bg-[#1c2530] text-[#8fa0b3]",
+  active: "bg-console-success-surface text-console-success-text",
+  locked: "bg-console-warning-selected text-console-warning-text",
+  inactive: "bg-console-active text-console-caption",
 };
 
 const ACTION =
-  "h-[34px] whitespace-nowrap rounded-md border border-[#2e3a48] px-3 text-[13px] text-[#c9d3df] hover:bg-ground focus-visible:outline-2 focus-visible:outline-text disabled:cursor-not-allowed disabled:opacity-50";
+  "h-[34px] whitespace-nowrap rounded-md border border-console-outline px-3 text-[13px] text-console-body hover:bg-ground focus-visible:outline-2 focus-visible:outline-text disabled:cursor-not-allowed disabled:opacity-50";
 
 /** The dialog that is open, and what it is about. A row's data is the row as it was when the dialog opened. */
 type OpenDialog =
@@ -76,7 +76,7 @@ function TableSkeleton() {
     >
       <span className="sr-only">{S.common.loading}</span>
       {["a", "b", "c", "d", "e", "f"].map((key) => (
-        <div key={key} className="h-10 animate-pulse rounded-md bg-[#1c2530]" />
+        <div key={key} className="h-10 animate-pulse rounded-md bg-console-active" />
       ))}
     </div>
   );
@@ -163,7 +163,7 @@ export function UsersPage() {
             const to = event.target.value;
             if (isRole(to) && to !== user.role) setDialog({ kind: "role", user, to });
           }}
-          className="h-9 w-[120px] rounded-md border border-[#2e3a48] bg-[#0f141b] px-2 text-[13px] text-text focus-visible:outline-2 focus-visible:outline-text disabled:cursor-not-allowed disabled:opacity-60"
+          className="h-9 w-[120px] rounded-md border border-console-outline bg-console-inset px-2 text-[13px] text-text focus-visible:outline-2 focus-visible:outline-text disabled:cursor-not-allowed disabled:opacity-60"
         >
           {ROLES.map((role) => (
             <option key={role} value={role}>
@@ -197,7 +197,7 @@ export function UsersPage() {
       id: "lastLogin",
       header: T.col.lastLogin,
       cell: (user) => (
-        <span className="text-[#aeb9c6]">
+        <span className="text-console-secondary">
           {user.last_login_at === null ? T.neverLoggedIn : formatTime(user.last_login_at)}
         </span>
       ),
@@ -282,7 +282,7 @@ export function UsersPage() {
         <div className="flex items-end gap-3">
           <div className="flex-1 space-y-1">
             <h1 className="text-[26px] font-semibold">{S.admin.title.users}</h1>
-            <p className="min-h-5 text-sm text-[#aeb9c6]">
+            <p className="min-h-5 text-sm text-console-secondary">
               {users !== null && T.count(users.length)}
             </p>
           </div>
@@ -293,7 +293,7 @@ export function UsersPage() {
               placeholder={T.search.placeholder}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              className="h-10 w-[220px] rounded-md border border-[#2e3a48] bg-[#0f141b] px-3 text-sm text-text focus-visible:outline-2 focus-visible:outline-text"
+              className="h-10 w-[220px] rounded-md border border-console-outline bg-console-inset px-3 text-sm text-text focus-visible:outline-2 focus-visible:outline-text"
             />
           </label>
         </div>

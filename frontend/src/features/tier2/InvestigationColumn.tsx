@@ -162,7 +162,7 @@ export function InvestigationColumn({
   return (
     <section
       aria-labelledby={headingId}
-      className="w-[560px] shrink-0 space-y-3.5 rounded border border-ai-border bg-ground p-4"
+      className="w-full min-w-0 space-y-3.5 rounded border border-ai-border bg-ground p-4"
     >
       <div className="flex items-baseline justify-between gap-3">
         <h2 id={headingId} className="text-xs font-semibold tracking-[0.08em] text-ai-accent">

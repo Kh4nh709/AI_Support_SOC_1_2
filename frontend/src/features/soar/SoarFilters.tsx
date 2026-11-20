@@ -41,11 +41,13 @@ export function SearchForm({ view, onSearch }: { view: SoarView; onSearch: (q: s
   const input = useRef<HTMLInputElement>(null);
   const send = (event: FormEvent) => {
     event.preventDefault();
-    onSearch(cleanQuery(draft));
+    const query = cleanQuery(draft);
+    setDraft(query);
+    onSearch(query);
   };
   return (
     <form role="search" onSubmit={send} className="flex flex-wrap items-end gap-3">
-      <label className="flex flex-col gap-1 text-xs text-muted">
+      <label className="flex max-w-full flex-col gap-1 text-xs text-muted">
         {S.soar.search.label}
         <input
           ref={input}
@@ -55,18 +57,19 @@ export function SearchForm({ view, onSearch }: { view: SoarView; onSearch: (q: s
           onChange={(event) => setDraft(event.target.value)}
           autoComplete="off"
           spellCheck={false}
-          className="w-72 rounded border border-border bg-ground px-2 py-1 text-sm text-text focus-visible:outline-2 focus-visible:outline-text"
+          className="w-72 max-w-full rounded border border-border bg-ground px-2 py-1 text-sm text-text focus-visible:outline-2 focus-visible:outline-text"
         />
       </label>
       <button type="submit" className={BUTTON}>
         {S.soar.search.submit}
       </button>
-      {view.q !== "" && (
+      {(view.q !== "" || draft !== "") && (
         <button
           type="button"
           className={BUTTON}
           onClick={() => {
-            onSearch("");
+            setDraft("");
+            if (view.q !== "") onSearch("");
             // the button goes with the search: the focus goes to the box, not to the page
             input.current?.focus();
           }}

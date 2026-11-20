@@ -175,8 +175,8 @@ export function ReactivateDialog({ user, onClose, onDone }: DialogProps) {
 // --- reset password -----------------------------------------------------------------------------------------------
 
 const FIELD =
-  "h-10 w-full rounded-md border border-[#2e3a48] bg-[#0f141b] px-3 text-sm text-text focus-visible:outline-2 focus-visible:outline-text aria-invalid:border-[#5a2e36]";
-const FIELD_ERROR = "text-[12.5px] text-[#fda4af]";
+  "h-10 w-full rounded-md border border-console-outline bg-console-inset px-3 text-sm text-text focus-visible:outline-2 focus-visible:outline-text aria-invalid:border-console-danger-outline";
+const FIELD_ERROR = "text-[12.5px] text-console-danger-text";
 
 export function ResetPasswordDialog({
   user,
@@ -234,12 +234,12 @@ export function ResetPasswordDialog({
         <>
           <p>{T.dialog.reset.sessions(user.username)}</p>
           {own && (
-            <p className="rounded-md border border-[#5a3a14] bg-[#2a1f12] px-3 py-2 text-[#fcd9a8]">
+            <p className="rounded-md border border-console-warning-outline bg-console-warning-tint px-3 py-2 text-console-warning-text">
               {T.dialog.reset.own}
             </p>
           )}
           <div className="flex flex-col gap-1.5">
-            <label htmlFor={passwordId} className="text-[13px] text-[#aeb9c6]">
+            <label htmlFor={passwordId} className="text-[13px] text-console-secondary">
               {T.dialog.reset.password}
             </label>
             <input
@@ -268,7 +268,7 @@ export function ResetPasswordDialog({
             )}
           </div>
           <div className="flex flex-col gap-1.5">
-            <label htmlFor={repeatId} className="text-[13px] text-[#aeb9c6]">
+            <label htmlFor={repeatId} className="text-[13px] text-console-secondary">
               {T.dialog.reset.repeat}
             </label>
             <input

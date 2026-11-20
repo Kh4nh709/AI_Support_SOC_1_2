@@ -151,6 +151,16 @@ describe("each filter", () => {
 });
 
 describe("the search box", () => {
+  it("can clear a draft before sending the search", async () => {
+    serve(server, fake());
+    renderTi();
+    const box = await screen.findByRole("searchbox", { name: S.ti.filters.search });
+    await userEvent.type(box, "draft");
+    await userEvent.click(screen.getByRole("button", { name: S.ti.filters.clear }));
+    expect(box).toHaveValue("");
+    expect(box).toHaveFocus();
+  });
+
   it("sends q as typed, as one parameter, and keeps it in the URL", async () => {
     const state = fake();
     serve(server, state);

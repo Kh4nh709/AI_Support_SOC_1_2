@@ -1152,3 +1152,23 @@ describe("accessibility", () => {
     expect(await violationsIn(container)).toEqual([]);
   });
 });
+
+it("previews a picked alert and updates the link without leaving the queue", async () => {
+  respond = () =>
+    HttpResponse.json(
+      answer([
+        row(),
+        row({ alert_id: "a/2", description: "Máy chủ thanh toán", occurrence_count: 48 }),
+      ]),
+    );
+  const user = userEvent.setup();
+  renderQueue();
+  await user.click(await screen.findByRole("button", { name: "Xem nhanh: Máy chủ thanh toán" }));
+  const preview = within(screen.getByRole("region", { name: "Xem nhanh" }));
+  expect(preview.getByRole("heading", { name: "Máy chủ thanh toán" })).toBeVisible();
+  expect(preview.getByRole("link", { name: "Mở cảnh báo" })).toHaveAttribute(
+    "href",
+    "/alerts/a%2F2",
+  );
+  expect(where()).toBe("/queue");
+});
