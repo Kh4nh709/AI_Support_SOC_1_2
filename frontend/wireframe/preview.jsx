@@ -87,7 +87,7 @@ function Demo() {
     [mobile, setMobile] = useState(settings.get("kho") === "mobile");
   const page = screen?.[0] || "catalog";
   const [chosenLayout, setLayout] = useState(settings.get("v"));
-  const layout = chosenLayout || (page === "soar" ? "a" : "b");
+  const layout = chosenLayout || (page === "ti" ? "a" : "b");
   const [compact, setCompact] = useState(settings.get("gon") === "1");
   const [dedupe, setDedupe] = useState(settings.get("bolap") === "1");
   const reason = layoutReason(page, layout);

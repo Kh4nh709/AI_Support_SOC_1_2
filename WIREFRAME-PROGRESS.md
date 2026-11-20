@@ -67,7 +67,7 @@ Các checkpoint trước nhóm Quản trị là `f779b3b1` (Hàng đợi/Alert),
 
 Đã rà cả 15 màn ở 1440 và 375 px trên Edge. Các trang có dữ liệu vừa chiều rộng viewport, không phát sinh lỗi JavaScript hoặc ngắt giữa từ khi đo phần văn bản hiển thị. Danh sách IOC rút gọn mã băm dài ở 375 px. Chi tiết cho xem đủ giá trị theo nhóm ký tự và sao chép nguyên mã.
 
-[Đối chiếu 15 cặp ảnh và khác biệt theo màn](docs/wireframe-comparison/index.html). Ảnh chụp cùng khổ 1440 × 1000 px, màu tối. SOAR dùng A, các màn nghiệp vụ còn lại dùng B. Các bản dùng bộ dữ liệu mẫu riêng. Hàng đợi và danh sách case giữ các trường rút gọn của B trong khung xem nhanh và bảng A.
+[Đối chiếu 15 cặp ảnh và khác biệt theo màn](docs/wireframe-comparison/index.html). Ảnh chụp cùng khổ 1440 × 1000 px, màu tối. SOAR dùng B, Threat Intel dùng A, các màn nghiệp vụ còn lại dùng B. Các bản dùng bộ dữ liệu mẫu riêng. Hàng đợi và danh sách case giữ các trường rút gọn của B trong khung xem nhanh và bảng A.
 
 Đã đối chiếu toàn bộ 1.994 khoá và giá trị trong danh mục với HTML ở `539259c6`, cùng các điều khiển trên 89 tổ hợp màn và trạng thái. Đã thao tác trực tiếp với chọn dòng, bố cục A/B, chế độ 375 px, tab AI, log cụm và bản nháp ghi chú case, xác nhận quyết định SOAR, khung IOC và tổng quan TI. Ba vai trò SOAR đã được kiểm tra ở cả hai khổ khi mở và đóng chi tiết.
 
