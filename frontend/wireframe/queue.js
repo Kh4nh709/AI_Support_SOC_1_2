@@ -63,7 +63,7 @@ export function queueApi(path,q,body){
    if(scenario==="growth"&&!conflictShown){conflictShown=true;row.occurrence_count+=12;return json({kind:"cluster_grew",seen_occurrence_count:body.seen_occurrence_count,occurrence_count:row.occurrence_count,delta:12,tolerance:2},409);}
    row.status=body.decision==="benign"?"closed_benign":"closed_fp";row.close_reason=body.reason;
  }
- if(action==="escalate"){row.status="escalated_tier2";row.case_id=escalations.length?crypto.randomUUID():caseId;escalations.push({case_id:row.case_id,title:body.title,severity:body.severity,alert:row});}
+ if(action==="escalate"){row.status="escalated_tier2";row.case_id=crypto.randomUUID();escalations.push({case_id:row.case_id,title:body.title,severity:body.severity,alert:row});}
  if(action==="reopen"){row.status="queued_tier1";row.acknowledged_by=null;row.acknowledged_by_name=null;}
  return {...row,closed_count:row.occurrence_count,head_count:1};
 }

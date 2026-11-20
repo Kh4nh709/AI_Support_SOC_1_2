@@ -33,7 +33,7 @@ function Demo(){
  const framed=settings.has("frame");
  document.documentElement.dataset.gray=gray?"1":"0";
  const show=(s)=>reload({man:s[0],role:s[3],tt:"du-lieu"},s[2]);
- const extras=screen?.[0]==="alert"?[["growth","Cụm tăng lúc đang đọc"],["reopen",S.decision.reopen]]:[];
+ const extras=screen?.[0]==="alert"?[["growth","Cụm tăng lúc đang đọc"],["reopen",S.decision.reopen]]:screen?.[0]==="case"?[["idle","Chưa phân tích"],["running","Đang chạy ②"],["stalled","Treo"],["failed","Lỗi ②"],["quota","Hết lượt"]]:[];
  const auth={ready:true,session,signedOut:session===null,logout:async()=>{query.clear();setSession(null);navigate("/login");},login:async(username)=>{setSession({role,username,token:"preview"});navigate(role==="admin"?"/admin/overview":role==="tier2"?"/cases":"/queue");}};
  const iframeUrl=new URL(location.href);iframeUrl.searchParams.set("frame","1");iframeUrl.searchParams.set("mau",gray?"xam":"mau");
  return <><div className="wf-tools" hidden={framed}><strong>Wireframe</strong>

@@ -1,6 +1,7 @@
 import {empty,me,json,scenario} from "./data";
 import {queueApi} from "./queue";
-const handlers=[queueApi];
+import {caseApi} from "./cases";
+const handlers=[queueApi,caseApi];
 // All requests from product components stay in this document's sample store.
 export function installTransport(){
  window.fetch=async (input,init={})=>{

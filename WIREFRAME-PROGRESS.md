@@ -5,7 +5,7 @@ Bản xem độc lập nằm ở `docs/wireframe.html`. Dữ liệu và các tha
 | Nhóm | Tiến độ | Nhóm khoá đã nối với component |
 | --- | --- | --- |
 | Hàng đợi / Alert | Đã dựng | app, appearance, nav, role, live, common, forbidden, workspace, band, severity, category, confidence, status, queue, alert, ai1, analysis, rag, decision |
-| Case | Chờ | case, caseStatus, conclusion, headStatus, ai2 |
+| Case | Đã dựng | case, caseStatus, conclusion, headStatus, ai2, analysis, rag, workspace |
 | SOAR | Chờ | soar |
 | Threat Intel | Chờ | ti |
 | Quản trị / Đăng nhập | Chờ | admin, login |
