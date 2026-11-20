@@ -433,3 +433,43 @@ main table :is(th, td), main table :is(.text-xs, .soc-severity) {
 @media (min-width: 768px) {
   .soc-record-list [data-record] td[data-column] { padding-block: .8rem; }
 }
+
+.wf-tools { gap: .5rem; border-bottom: 1px solid var(--color-border); }
+.wf-tools button { min-height: 32px; cursor: pointer; }
+.wf-tools button[aria-pressed="true"] { color: var(--color-ai-accent); }
+.wf-reason { padding: .45rem 1.25rem; font-size: 13px; color: var(--color-muted); }
+.wf-reason summary { cursor: pointer; width: fit-content; }
+.wf-reason p { margin: .4rem 0; color: var(--color-text); }
+[data-compact="true"] :is(.wf-summary header p, [data-column="description"] span.font-mono, .soc-lookup-layout + p) { display: none; }
+[data-dedupe="true"] :is(.soc-record-layout > section h3, .soc-preview-row section h3, .wf-summary header > div > h2) { display: none; }
+[data-page="ti"][data-layout="a"] .soc-lookup > :first-child { order: -2; }
+[data-page="ti"][data-layout="a"] .soc-lookup > details { order: -1; }
+@media (min-width: 768px) {
+  [data-layout="b"] .soc-record-layout:has(> section) { grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); }
+  [data-layout="b"] .soc-record-list { display: block; min-width: 0; }
+  [data-layout="b"] .soc-record-list tbody { display: block; }
+  [data-layout="b"] .soc-record-list thead tr { display: flex; flex-wrap: wrap; gap: .5rem; }
+  [data-layout="b"] .soc-record-list thead th:not([data-sortable]) { display: none !important; }
+  [data-layout="b"] .soc-record-list thead:not(:has([data-sortable])) { display: none !important; }
+  [data-layout="b"] .soc-record-list [data-record] {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+    padding: .85rem 1rem; gap: .5rem 1rem;
+  }
+  [data-layout="b"] .soc-record-list [data-record] td[data-column] {
+    display: block !important; grid-area: auto; padding: 0; min-width: 0; max-width: none;
+  }
+  [data-layout="b"] .soc-record-list [data-record] :is([data-column="description"], [data-column="title"], [data-column="actions"], [data-column="value"]) {
+    grid-column: 1 / -1 !important;
+  }
+  [data-layout="b"] .soc-record-list td[data-label]:not([data-label=""])::before {
+    content: attr(data-label); display: block !important; font-size: 13px; color: var(--color-muted);
+  }
+}
+@media (min-width: 1050px) {
+  [data-layout="a"] div:has(> [role="tabpanel"][id$="-panel-evidence"]:not([hidden])) {
+    display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); align-items: start; gap: 1rem;
+  }
+  [data-layout="a"] div:has(> [role="tabpanel"][id$="-panel-evidence"]) > :not([role="tabpanel"]) { grid-column: 1/-1; }
+  [data-layout="a"] [id$="-panel-evidence"]:not([hidden]) ~ [role="tabpanel"][id$="-panel-analysis"] { display: block; }
+  [data-layout="a"] .wf-evidence { grid-template-columns: minmax(0, 1fr); }
+}

@@ -10,6 +10,7 @@ import { screens, settings, roles, me, scenario, alertId } from "./data";
 import { installTransport } from "./transport";
 import "../src/styles.css";
 import "./preview.css";
+import { LayoutButtons, layoutReason, hasLayouts } from "./LayoutTools";
 import { Coverage } from "./Coverage";
 import { growCluster } from "./queue";
 installTransport();
@@ -82,12 +83,32 @@ function Demo() {
     );
   const [gray, setGray] = useState(settings.get("mau") === "xam"),
     [mobile, setMobile] = useState(settings.get("kho") === "mobile");
+  const page = screen?.[0] || "catalog";
+  const [chosenLayout, setLayout] = useState(settings.get("v"));
+  const layout = chosenLayout || (page === "soar" ? "a" : "b");
+  const [compact, setCompact] = useState(settings.get("gon") === "1");
+  const [dedupe, setDedupe] = useState(settings.get("bolap") === "1");
+  const reason = layoutReason(page, layout);
+  React.useLayoutEffect(() => {
+    Object.assign(document.documentElement.dataset, {
+      page, layout, compact: String(compact), dedupe: String(dedupe),
+    });
+  }, [page, layout, compact, dedupe]);
+  React.useEffect(() => {
+    if (page === "ti") {
+      const statistics = document.querySelector(".soc-lookup > details");
+      if (statistics) statistics.open = layout === "a";
+    }
+  }, [page, layout, mobile]);
   React.useEffect(() => {
     const url = new URL(location.href);
+    if (chosenLayout) url.searchParams.set("v", chosenLayout);
+    url.searchParams.set("gon", compact ? "1" : "0");
+    url.searchParams.set("bolap", dedupe ? "1" : "0");
     url.searchParams.set("mau", gray ? "xam" : "mau");
     url.searchParams.set("kho", mobile ? "mobile" : "desktop");
     history.replaceState(history.state, "", url);
-  }, [gray, mobile]);
+  }, [gray, mobile, chosenLayout, compact, dedupe]);
   const framed = settings.has("frame");
   React.useEffect(() => {
     if (scenario !== "growth" || !pathname.startsWith("/alerts/")) return;
@@ -155,11 +176,15 @@ function Demo() {
   };
   const iframeUrl = new URL(location.href);
   iframeUrl.searchParams.set("frame", "1");
+  iframeUrl.searchParams.set("v", layout);
+  iframeUrl.searchParams.set("gon", compact ? "1" : "0");
+  iframeUrl.searchParams.set("bolap", dedupe ? "1" : "0");
   iframeUrl.searchParams.set("mau", gray ? "xam" : "mau");
   return (
     <>
       <div className="wf-tools" hidden={framed}>
         <strong>Wireframe</strong>
+        {hasLayouts(page) && <LayoutButtons page={page} layout={layout} setLayout={setLayout} />}
         <label>
           Màn hình
           <select
@@ -203,10 +228,16 @@ function Demo() {
         <button aria-pressed={gray} onClick={() => setGray(!gray)}>
           Màu
         </button>
+        <button aria-pressed={compact} onClick={() => setCompact(!compact)}>Gọn chữ</button>
+        <button aria-pressed={dedupe} onClick={() => setDedupe(!dedupe)}>Bỏ lặp</button>
         <button aria-pressed={mobile} onClick={() => setMobile(!mobile)}>
           375 px
         </button>
       </div>
+      {!framed && reason && <details className="wf-reason">
+        <summary>Vì sao chọn bố cục này</summary>
+        <p>{reason}</p>
+      </details>}
       {mobile && !framed ? (
         <iframe title="Bố cục 375 px" src={iframeUrl.href} />
       ) : pathname === "/" ? (
