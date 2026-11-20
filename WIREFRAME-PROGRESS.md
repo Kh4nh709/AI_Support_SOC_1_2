@@ -56,3 +56,7 @@ Trong [Danh mục wireframe](docs/wireframe.html), mở **Đối chiếu strings
 Edge mở đủ 15 màn ở cả 375 px và 1440 px trên cổng 8786. Mỗi màn vừa chiều rộng viewport và không phát sinh lỗi JavaScript. Đã so sánh từng tên khoá trong bảng tra với 1.994 khoá lá của `strings.ts`, kiểm tra header theo ba vai trò, mở log của cụm trong Case và quan sát cảnh báo khi số lần xuất hiện của alert tăng từ 2 lên 14.
 
 Các checkpoint trước nhóm Quản trị là `f779b3b1` (Hàng đợi/Alert), `fb0be915` (Case), `f88dbe2b` (SOAR) và `dd1b6188` (Threat Intel). Nhóm Quản trị, Đăng nhập và bảng đối chiếu nằm trong commit chứa phần kiểm tra này.
+
+## Sửa giao diện
+
+- đã xong mục 1

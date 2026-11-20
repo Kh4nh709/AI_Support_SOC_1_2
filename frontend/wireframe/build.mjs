@@ -15,7 +15,10 @@ const result = await build({
   publicDir: false,
   plugins: [react(), tailwind()],
   resolve: {
-    alias: [{ find: /^(?:.*\/live\/|\.\/)LiveProvider$/, replacement: resolve(here, "live.js") }],
+    alias: [
+      { find: /^\.\.\/analysis\/Tabs$/, replacement: resolve(here, "DetailTabs.jsx") },
+      { find: /^(?:.*\/live\/|\.\/)LiveProvider$/, replacement: resolve(here, "live.js") },
+    ],
   },
   define: {
     "process.env.NODE_ENV": JSON.stringify("production"),
