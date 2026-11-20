@@ -473,3 +473,112 @@ main table :is(th, td), main table :is(.text-xs, .soc-severity) {
   [data-layout="a"] [id$="-panel-evidence"]:not([hidden]) ~ [role="tabpanel"][id$="-panel-analysis"] { display: block; }
   [data-layout="a"] .wf-evidence { grid-template-columns: minmax(0, 1fr); }
 }
+
+main h1 { font: 600 clamp(24px, 2.3vw, 32px)/1.22 var(--font-sans); letter-spacing: -.02em; }
+main :is(.break-all, .break-words, .wrap-anywhere, pre) { word-break: normal; overflow-wrap: normal; }
+main table :is(th, td, th *, td *):not(.sr-only) { font-size: max(13px, 1em); }
+.wf-table-container { container-type: inline-size; min-width: 0; }
+.soc-lookup .soar-actions { flex-wrap: nowrap; }
+.soar-action-item > span { white-space: nowrap; }
+.soc-record-layout > section, .soc-preview-row section { background: var(--color-surface); border-color: var(--color-border); }
+.soc-record-layout section h2 { color: var(--color-text); border-color: var(--color-border); }
+main nav[aria-label="Quản trị"] { background: var(--color-surface); }
+main nav[aria-label="Quản trị"] [aria-current="page"] { color: var(--color-ai-accent); background: var(--color-ai-surface); }
+main button.bg-blue-600 { background-color: var(--color-ai-accent); color: var(--color-ground); }
+main button.bg-blue-600:hover:enabled { filter: brightness(1.08); }
+.soc-lookup [data-column="value"] button { max-width: 100%; }
+.soc-lookup [data-column="value"] .line-clamp-3 {
+  display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wf-evidence :is(pre, dd) { min-width: 0; }
+
+@media (min-width: 900px) {
+  [data-page="case"][data-layout="b"] .wf-evidence > :last-child { grid-column: 2; grid-row: 1; }
+}
+@media (max-width: 767px) {
+  table:not(.soc-record-list) { display: block; width: 100%; min-width: 0; }
+  table:not(.soc-record-list) > thead {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+  }
+  table:not(.soc-record-list) > tbody { display: block; }
+  table:not(.soc-record-list) > tbody > tr:not([hidden]) {
+    display: grid; gap: .5rem; padding: .85rem; border-top: 1px solid var(--color-border);
+  }
+  table:not(.soc-record-list) > tbody > tr > td {
+    display: block; width: auto; max-width: none; min-width: 0; padding: 0; text-align: start; white-space: normal;
+  }
+  table:not(.soc-record-list) td[data-wf-heading]::before {
+    display: block; content: attr(data-wf-heading); color: var(--color-muted); font-size: 13px;
+  }
+}
+@media (max-width: 767px) {
+  .wf-evidence .grid { grid-template-columns: minmax(0, 1fr); }
+  .soc-workspace [role="tablist"] { flex-wrap: wrap; }
+  .soc-workspace [role="tab"] { min-height: 36px; }
+  .wf-evidence .wf-summary section[aria-label] > dl:has(> dt) { grid-template-columns: auto minmax(0, 1fr); }
+  .soc-record-list td[data-wf-heading]::before { content: attr(data-wf-heading); }
+  .soc-lookup .soar-actions { flex-wrap: wrap; }
+}
+@media (min-width: 768px) {
+  [data-layout="b"] .soc-record-list td[data-wf-heading]::before {
+    content: attr(data-wf-heading); display: block !important; font-size: 13px; color: var(--color-muted);
+  }
+}
+iframe { border: 0; outline: 1px solid var(--color-border); }
+[data-compact="true"] :is(.soc-lookup form > p.basis-full, main h1 + p.max-w-3xl) { display: none; }
+[data-page="login"] main > section { max-width: 26rem; padding: 0; border: 0; background: transparent; }
+[data-page="login"] main form { padding: 1rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 10px; }
+[data-page="login"] main form button { align-self: start; border: 1px solid var(--color-border); background: var(--color-ground); color: var(--color-text); }
+[data-page="soar"] :is([data-column="time"], [data-column="score"]) { white-space: nowrap !important; }
+.soc-lookup section li button { min-height: 32px; }
+@media (max-width: 767px) {
+  .soc-lookup label:has([role="switch"]) span { text-wrap: balance; }
+  .soc-lookup .soar-actions {
+    display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); width: 100%;
+  }
+  .soc-lookup .soar-action-item { min-width: 0; }
+  .soc-lookup .soar-decision {
+    white-space: normal; overflow-wrap: normal; grid-template-columns: auto; text-align: center; min-height: 44px;
+  }
+  .soc-lookup .soar-decision::before { display: none; }
+  .soc-lookup .soar-action-item > span { white-space: normal; text-align: center; }
+}
+@media (min-width: 768px) {
+  @container (max-width: 55rem) {
+    [data-layout="a"] .soc-record-list { display: block; width: 100%; min-width: 0; }
+    [data-layout="a"] .soc-record-list tbody { display: block; }
+    [data-layout="a"] .soc-record-list thead tr { display: flex; flex-wrap: wrap; }
+    [data-layout="a"] .soc-record-list thead th:not([data-sortable]) { display: none !important; }
+    [data-layout="a"] .soc-record-list thead:not(:has([data-sortable])) { display: none !important; }
+    [data-layout="a"] .soc-record-list [data-record] {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); align-items: start; gap: .7rem;
+    }
+    [data-layout="a"] .soc-record-list [data-record] td[data-column] {
+      display: block !important; grid-area: auto; min-width: 0; max-width: none; padding: 0;
+    }
+    [data-layout="a"] .soc-record-list [data-record] :is([data-column="title"], [data-column="description"], [data-column="value"], [data-column="actions"]) { grid-column: 1 / -1 !important; }
+    [data-layout="a"] .soc-record-list td[data-wf-heading]::before {
+      display: block !important; content: attr(data-wf-heading); color: var(--color-muted); font-size: 13px;
+    }
+  }
+}
+@media (min-width: 768px) {
+  [data-page="admin-overview"] .grid:has(> .col-span-2 table) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  [data-page="admin-overview"] .col-span-2:has(table) { grid-column: 1/-1; }
+}
+/* In B, fields already present in the adjacent preview need not repeat on every card. */
+[data-layout="b"] .soc-record-layout .soc-record-list tr[data-record] {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: .35rem .85rem; padding: .8rem 1rem;
+}
+[data-layout="b"] .soc-record-layout .soc-record-list tr[data-record] td[data-column] { order: 1; padding: 0; }
+[data-layout="b"] .soc-record-layout .soc-record-list tr[data-record] td::before { display: none !important; }
+[data-layout="b"] .soc-record-layout .soc-record-list tr[data-record] td:is([data-column="description"], [data-column="title"]) {
+  order: 2; flex-basis: 100%;
+}
+[data-layout="b"] .soc-record-layout .soc-record-list tr[data-record] td:is([data-column="agent"], [data-column="alerts"]) { order: 3; }
+[data-layout="b"] .soc-record-layout .soc-record-list tr[data-record] td[data-column="alerts"]::before {
+  display: inline !important; content: attr(data-wf-heading) " · "; font-size: 13px;
+}
+[data-layout="b"] .soc-record-layout .soc-record-list tr[data-record] td:is([data-column="category"], [data-column="user"], [data-column="srcip"], [data-column="occurrences"], [data-column="created"], [data-column="clusters"]) {
+  display: none !important;
+}

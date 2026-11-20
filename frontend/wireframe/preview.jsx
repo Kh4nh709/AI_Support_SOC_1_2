@@ -11,6 +11,7 @@ import { installTransport } from "./transport";
 import "../src/styles.css";
 import "./preview.css";
 import { LayoutButtons, layoutReason, hasLayouts } from "./LayoutTools";
+import { useTableHeadings } from "./useTableHeadings";
 import { Coverage } from "./Coverage";
 import { growCluster } from "./queue";
 installTransport();
@@ -63,6 +64,7 @@ function previewQueueRow(event) {
 }
 
 function Demo() {
+  useTableHeadings();
   const { pathname } = useLocation(),
     navigate = useNavigate();
   const role = Object.hasOwn(roles, initialRole) ? initialRole : "tier1";
@@ -234,7 +236,7 @@ function Demo() {
           375 px
         </button>
       </div>
-      {!framed && reason && <details className="wf-reason">
+      {!framed && reason && <details className="wf-reason" data-wf-reason="">
         <summary>Vì sao chọn bố cục này</summary>
         <p>{reason}</p>
       </details>}

@@ -16,6 +16,8 @@ const result = await build({
   plugins: [react(), tailwind()],
   resolve: {
     alias: [
+      { find: "../../components/KeyValueGrid", replacement: resolve(here, "ReadableFields.jsx") },
+      { find: "./Reference", replacement: resolve(here, "ReadableFields.jsx") },
       { find: /^\.\.\/analysis\/Tabs$/, replacement: resolve(here, "DetailTabs.jsx") },
       { find: /^(?:.*\/live\/|\.\/)LiveProvider$/, replacement: resolve(here, "live.js") },
     ],
