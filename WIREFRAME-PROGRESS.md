@@ -72,3 +72,9 @@ Các checkpoint trước nhóm Quản trị là `f779b3b1` (Hàng đợi/Alert),
 Đã đối chiếu toàn bộ 1.994 khoá và giá trị trong danh mục với HTML ở `539259c6`, cùng các điều khiển trên 89 tổ hợp màn và trạng thái. Đã thao tác trực tiếp với chọn dòng, bố cục A/B, chế độ 375 px, tab AI, log cụm và bản nháp ghi chú case, xác nhận quyết định SOAR, khung IOC và tổng quan TI. Ba vai trò SOAR đã được kiểm tra ở cả hai khổ khi mở và đóng chi tiết.
 
 Các commit theo thứ tự là `4db90647`, `85c5d8dd`, `8438a437`, `17012720` và `afab0f4f`. Như bản gốc, đầu vào để dựng HTML là các component trong worktree `trial`. Năm commit giao diện chỉ chứa mã wireframe, HTML dựng ra, ảnh đối chiếu và sổ tiến độ.
+
+### Chỉnh theo lượt duyệt
+
+- Hai cột Bằng chứng của alert xếp panel độc lập. Panel đầu dùng một tiêu đề là **Dữ liệu cảnh báo**.
+- Thẻ case ở bố cục B mở xem nhanh khi chọn dòng. Nhãn SOAR trùng với nội dung nút được ẩn trong bảng.
+- Đã kiểm tra ba màn ở 1440 px và 375 px, gồm cả hai bố cục SOAR, và cập nhật ảnh đối chiếu.

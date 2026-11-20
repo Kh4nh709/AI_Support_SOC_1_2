@@ -52,11 +52,14 @@ function reload(patch, path) {
   location.assign(url);
   if (url.search === location.search) location.reload();
 }
-function previewQueueRow(event) {
+function previewRecordRow(event) {
   const target = event.target;
   if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.detail === 0 ||
       target.closest("button, input, select") || !window.getSelection()?.isCollapsed) return;
-  const button = target.closest("[data-record]")?.querySelector('[data-column="description"] button[aria-pressed]');
+  const row = target.closest("[data-record]");
+  const button = row?.querySelector(
+    '[data-column="description"] button[aria-pressed], [data-page="cases"][data-layout="b"] [data-column="title"] button[aria-pressed]',
+  );
   if (!button) return;
   event.preventDefault();
   event.stopPropagation();
@@ -266,7 +269,7 @@ function Demo() {
         </main>
       ) : (
         <AuthContext.Provider value={auth}>
-          <div className="wf-app" onClickCapture={previewQueueRow}><AppRoutes /></div>
+          <div className="wf-app" onClickCapture={previewRecordRow}><AppRoutes /></div>
         </AuthContext.Provider>
       )}
     </>
