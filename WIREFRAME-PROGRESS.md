@@ -6,7 +6,7 @@ Bản xem độc lập nằm ở `docs/wireframe.html`. Dữ liệu và các tha
 | --- | --- | --- |
 | Hàng đợi / Alert | Đã dựng | app, appearance, nav, role, live, common, forbidden, workspace, band, severity, category, confidence, status, queue, alert, ai1, analysis, rag, decision |
 | Case | Đã dựng | case, caseStatus, conclusion, headStatus, ai2, analysis, rag, workspace |
-| SOAR | Chờ | soar |
+| SOAR | Đã dựng | soar (bảng phiếu, chi tiết, thông báo, báo phiếu mới, đồng hồ, quyết định, phân trang và huy hiệu ở header) |
 | Threat Intel | Chờ | ti |
 | Quản trị / Đăng nhập | Chờ | admin, login |
 

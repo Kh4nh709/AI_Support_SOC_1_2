@@ -1,14 +1,15 @@
 import {empty,me,json,scenario} from "./data";
 import {queueApi} from "./queue";
 import {caseApi} from "./cases";
-const handlers=[queueApi,caseApi];
+import {soarApi} from "./soar";
+const handlers=[queueApi,caseApi,soarApi];
 // All requests from product components stay in this document's sample store.
 export function installTransport(){
  window.fetch=async (input,init={})=>{
   const url=new URL(typeof input==="string"?input:input.url, "http://wireframe.local");
   const path=decodeURIComponent(url.pathname.replace(/^\/api/,""));
   if(path==="/auth/me")return json(me);
-  if(path==="/soar/reviews/count")return json({count:empty?0:4,latest_received_at:null});
+  if(path==="/soar/reviews/count")return json(soarApi(path,url.searchParams,{}));
   if(scenario==="dang-tai")return new Promise((_,reject)=>init.signal?.addEventListener("abort",()=>reject(new DOMException("Aborted","AbortError")),{once:true}));
   if(scenario==="loi")return json({},503);
   const body=init.body?JSON.parse(init.body):{};
