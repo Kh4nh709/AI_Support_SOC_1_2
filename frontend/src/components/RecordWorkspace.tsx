@@ -1,4 +1,11 @@
-import { useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import {
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { Link } from "react-router";
 import { S } from "../strings";
 
@@ -12,6 +19,31 @@ function watchWidth(onChange: () => void) {
 
 function isNarrow() {
   return window.matchMedia?.(NARROW).matches ?? false;
+}
+
+// A plain click anywhere on a card, its title link included, previews that record. A click with a modifier
+// key (open in a new tab), a click on another control, a keyboard "click" (Enter on the link, `detail` 0)
+// and the end of a text selection keep their own meaning.
+function previewCard(event: MouseEvent<HTMLElement>) {
+  const target = event.target as Element;
+  if (
+    event.button !== 0 ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.shiftKey ||
+    event.altKey ||
+    event.detail === 0 ||
+    target.closest("button, input, select, textarea") ||
+    !(window.getSelection()?.isCollapsed ?? true)
+  ) {
+    return;
+  }
+  const pick = target
+    .closest("[data-record]")
+    ?.querySelector<HTMLButtonElement>("button[data-record-pick]");
+  if (!pick) return;
+  event.preventDefault();
+  pick.click();
 }
 
 export type PickRecord<T> = (row: T) => ReactNode;
@@ -44,10 +76,13 @@ export function RecordWorkspace<T>({
   const previewSection = useRef<HTMLElement>(null);
   const narrow = useSyncExternalStore(watchWidth, isNarrow, () => false);
 
+  // The card itself is what a pointer picks (`previewCard`), so the button is not drawn: it stays for the
+  // keyboard and the screen reader, and the card is outlined while it has focus.
   function select(row: T) {
     return (
       <button
         type="button"
+        data-record-pick=""
         aria-label={S.workspace.previewRow(title(row))}
         aria-pressed={rowKey(row) === selectedKey}
         onClick={() => {
@@ -56,7 +91,7 @@ export function RecordWorkspace<T>({
             requestAnimationFrame(() => previewSection.current?.focus());
           }
         }}
-        className="shrink-0 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted hover:border-ai-accent hover:text-text focus-visible:outline-2 focus-visible:outline-ai-accent"
+        className="sr-only"
       >
         {S.workspace.preview}
       </button>
@@ -94,7 +129,7 @@ export function RecordWorkspace<T>({
   }
 
   return (
-    <div className="soc-record-layout">
+    <div className="soc-record-layout" onClickCapture={previewCard}>
       {list(selectedKey, select, (row) =>
         narrow && rowKey(row) === selectedKey ? preview(row) : null,
       )}

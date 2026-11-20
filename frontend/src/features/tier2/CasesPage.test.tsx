@@ -411,3 +411,26 @@ it("previews the selected case and preserves its full-detail destination", async
     "/cases/" + second.case_id,
   );
 });
+
+it("previews the first case at once and another one when its card or title is clicked", async () => {
+  serve([row(1), row(2, { status: "concluded_fp" }), row(3)]);
+  const user = userEvent.setup();
+  renderList();
+  const preview = () => within(screen.getByRole("region", { name: "Xem nhanh" }));
+  const heading = (title: string) => preview().getByRole("heading", { level: 3, name: title });
+  const [, , second] = within(await table()).getAllByRole("row");
+
+  expect(heading("Brute force vào máy chủ 1")).toBeVisible();
+
+  // A click on the card's text, not on a control, picks it.
+  await user.click(within(second as HTMLElement).getByText(S.caseStatus.concluded_fp));
+  expect(heading("Brute force vào máy chủ 2")).toBeVisible();
+  expect(
+    screen.getByRole("button", { name: "Xem nhanh: Brute force vào máy chủ 2" }),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  // A plain click on the title previews the case and stays on the list.
+  await user.click(screen.getByRole("link", { name: "Brute force vào máy chủ 3" }));
+  expect(heading("Brute force vào máy chủ 3")).toBeVisible();
+  expect(screen.getByRole("heading", { level: 1, name: S.case.listTitle })).toBeInTheDocument();
+});
