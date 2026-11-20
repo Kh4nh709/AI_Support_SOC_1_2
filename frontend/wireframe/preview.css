@@ -277,3 +277,70 @@ div:has(> table) {
     min-width: 0;
   }
 }
+
+/* Keep the signal and its existing permission feedback together in the heading. */
+.soc-lookup:has([role="switch"]) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+.soc-lookup:has([role="switch"]) > * { grid-column: 1 / -1; }
+.soc-lookup:has([role="switch"]) > :first-child { grid-column: 1; align-self: center; }
+.soc-lookup > div:has(> label [role="switch"]) {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  align-items: end;
+  max-width: 22rem;
+}
+.soc-lookup label:has([role="switch"]) { cursor: pointer; }
+.soc-lookup [role="switch"] {
+  appearance: none;
+  width: 2.1rem;
+  height: 1.2rem;
+  padding: 2px;
+  border-radius: 1rem;
+  background: var(--color-muted);
+  cursor: pointer;
+}
+.soc-lookup [role="switch"]::before {
+  display: block;
+  content: "";
+  width: .95rem;
+  height: .95rem;
+  border-radius: 50%;
+  background: var(--color-ground);
+}
+.soc-lookup [role="switch"]:checked { background: var(--color-ai-accent); }
+.soc-lookup [role="switch"]:checked::before { margin-left: auto; }
+.soc-lookup > div:has([role="switch"]):not(:hover, :focus-within) > p {
+  position: absolute;
+  clip-path: inset(50%);
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+.soc-lookup .soc-record-list [data-column] { overflow-wrap: normal; }
+.soc-lookup :is([data-soar-open], [data-column="score"] > span, .soar-decision) {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+.soc-lookup .soar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  gap: .4rem;
+  width: auto;
+}
+.soar-action-item { min-width: min-content; }
+.soar-decision { min-height: 2.15rem; grid-template-columns: 1rem auto; gap: .35rem; }
+@media (min-width: 768px) {
+  .soc-record-list:has([data-soar-open]) [data-column="id"] { min-width: 6rem; }
+  .soc-record-list:has([data-soar-open]) [data-column="score"] { min-width: 3.5rem; }
+  .soc-record-list:has([data-soar-open]) [data-column="actions"] { min-width: 14rem; }
+  .soc-record-list:has([data-soar-open]) :is([data-column="scenario"], [data-column="status"]) { min-width: 7rem; }
+}
+@media (max-width: 540px) {
+  .soc-lookup:has([role="switch"]) { column-gap: .5rem; }
+  .soc-lookup > div:has(> label [role="switch"]) { max-width: 10rem; }
+}
